@@ -31,7 +31,8 @@ traffic further.
 ### Design goals
 
 1. **Standard DNS messages only.** No custom TCP framing, no new ports required.
-2. **DNS-safe encoding.** Every label uses the lowercase base32 alphabet (`a–v`),
+2. **DNS-safe encoding.** Every label uses the lowercase base32 alphabet
+   (`a–z2–7`, RFC 4648),
    which is valid in DNS names and case-insensitive-safe.
 3. **Respects DNS limits.** Names ≤ 253 bytes, labels ≤ 63 bytes, TXT ≤ 255 bytes.
 4. **Cache-oblivant.** Call queries are never silently served from resolver cache
@@ -123,7 +124,7 @@ lowercase, no padding)** and **chunked into ≤63-byte labels**.
 
 1. Serialize tool arguments. For structured arguments, use **JSON**. For binary
    results, use **base64** within the JSON envelope (see §5).
-2. `b32 = base32_no_pad(json_bytes)` (alphabet `a–v`).
+2. `b32 = base32_no_pad(json_bytes)` (alphabet `a–z2–7`, RFC 4648).
 3. Split `b32` into consecutive substrings of ≤63 chars. Each becomes one DNS
    label, most-significant first.
 
@@ -133,7 +134,7 @@ Example: args `{"q":"hi"}` → JSON `{"q":"hi"}` → 13 bytes → base32
 Full call name:
 `nbswy3dpf3sxv53tn2txq53j.tool.call.<nonce>.example`
 
-**Encoding alphabet & charset rule:** only `a–v0-2` are emitted, guaranteeing
+**Encoding alphabet & charset rule:** only `a–z` and `2–7` are emitted, guaranteeing
 DNS-safety and avoiding case/`-`/`_` ambiguity.
 
 ---
@@ -214,7 +215,7 @@ stale or spoofed result could be returned to the agent. **Every call query is ma
 uncacheable** by embedding a fresh random `<nonce>` label, so the exact name is
 never seen twice.
 
-- **Nonce:** 8–16 lowercase-base32 chars (`[a-v0-2]`), cryptographically random.
+- **Nonce:** 8–16 lowercase-base32 chars (`[a-z2-7]`), cryptographically random.
 - Included in the call name (§2.3) so the full name is unique per call.
 - Also used for replay protection (§7).
 
