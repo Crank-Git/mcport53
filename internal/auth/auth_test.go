@@ -129,3 +129,18 @@ func TestSignIsCaseSensitive(t *testing.T) {
 		t.Fatal("Sign emitted uppercase letters; signatures must be lowercase base32")
 	}
 }
+
+// TestSignAtMatchesSign pins SignAt to its Unix-seconds wrapper.
+func TestSignAtMatchesSign(t *testing.T) {
+	ts := time.Unix(1_700_000_000, 0)
+	if got := SignAt([]byte(testSecret), testTool, testNonce, testArgs, ts); got != Sign([]byte(testSecret), testTool, testNonce, testArgs, ts.Unix()) {
+		t.Fatal("SignAt differs from Sign at the same timestamp")
+	}
+}
+
+// TestVerifyInWindowBadBase32 guards the decode-failure branch.
+func TestVerifyInWindowBadBase32(t *testing.T) {
+	if _, ok := VerifyInWindow([]byte(testSecret), "not base32!!!", testTool, testNonce, testArgs, 1_700_000_000, 60); ok {
+		t.Fatal("VerifyInWindow accepted an ill-formed base32 signature")
+	}
+}

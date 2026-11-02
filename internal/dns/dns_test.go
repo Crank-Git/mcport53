@@ -12,6 +12,7 @@ import (
 	"github.com/Crank-Git/mcport53/internal/auth"
 	"github.com/Crank-Git/mcport53/internal/codec"
 	"github.com/miekg/dns"
+	miedns "github.com/miekg/dns"
 )
 
 const testZone = "example."
@@ -69,6 +70,15 @@ func newTestServer(t *testing.T) (*Client, *testHarness) {
 // anonymous in-process UDP listener and returns a client for it.
 func startTestServer(t *testing.T, h *Handlers) *Client {
 	t.Helper()
+	c, _ := startTestServerWithAddr(t, h)
+	return c
+}
+
+// startTestServerWithAddr is like startTestServer but also returns the server's
+// listen address, which is needed by tests that must send raw messages the
+// Client helper cannot express.
+func startTestServerWithAddr(t *testing.T, h *Handlers) (*Client, string) {
+	t.Helper()
 	srv := NewServer(testZone, h).WithDiscovery("127.0.0.1.", 53)
 	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
@@ -84,10 +94,86 @@ func startTestServer(t *testing.T, h *Handlers) *Client {
 		_ = dnsSrv.Shutdown()
 		<-done
 	})
-	return NewClient(udpConn.LocalAddr().String())
+	return NewClient(udpConn.LocalAddr().String()), udpConn.LocalAddr().String()
 }
 
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+// startRawServer launches an in-process UDP server whose replies are produced
+// by fn, letting tests exercise malformed-response handling that the normal
+// Handlers cannot express.
+func startRawServer(t *testing.T, fn func(req *dns.Msg) *dns.Msg) *Client {
+	t.Helper()
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("bind udp: %v", err)
+	}
+	srv := &miedns.Server{PacketConn: udpConn, Handler: miedns.HandlerFunc(func(w miedns.ResponseWriter, r *miedns.Msg) {
+		resp := fn(r)
+		if resp == nil {
+			resp = reply(r)
+		}
+		_ = w.WriteMsg(resp)
+	})}
+	done := make(chan struct{})
+	go func() {
+		_ = srv.ActivateAndServe()
+		close(done)
+	}()
+	t.Cleanup(func() {
+		_ = srv.Shutdown()
+		<-done
+	})
+	return NewClient(udpConn.LocalAddr().String())
+}
+
+// Discovery: an SRV answer whose TXT is not valid base64 is a decode error.
+func TestDiscoveryMalformedTXT(t *testing.T) {
+	c := startRawServer(t, func(req *dns.Msg) *dns.Msg {
+		resp := reply(req)
+		resp.Rcode = dns.RcodeSuccess
+		resp.Answer = []dns.RR{&dns.TXT{
+			Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
+			Txt: []string{"!not-valid-base64!"},
+		}}
+		return resp
+	})
+	if _, err := c.Discovery(testZone); err == nil {
+		t.Fatal("expected a base64 decode error for a malformed TXT answer")
+	}
+}
+
+// Discovery: a TXT answer that is not a JSON document is a parse error.
+func TestDiscoveryNonJSON(t *testing.T) {
+	c := startRawServer(t, func(req *dns.Msg) *dns.Msg {
+		resp := reply(req)
+		resp.Rcode = dns.RcodeSuccess
+		resp.Answer = []dns.RR{&dns.TXT{
+			Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
+			Txt: []string{b64("not json")},
+		}}
+		return resp
+	})
+	if _, err := c.Discovery(testZone); err == nil {
+		t.Fatal("expected a JSON parse error for a non-JSON TXT answer")
+	}
+}
+
+// Discovery: an exchange that fails is surfaced as an error.
+func TestDiscoveryExchangeError(t *testing.T) {
+	c := NewClient("127.0.0.1:1")
+	if _, err := c.Discovery(testZone); err == nil {
+		t.Fatal("expected an exchange error when the server is unreachable")
+	}
+}
+
+// queryTXT: a query whose exchange fails is surfaced as an error.
+func TestQueryExchangeError(t *testing.T) {
+	c := NewClient("127.0.0.1:1")
+	if _, err := c.queryTXT(dns.Fqdn("a.example."), dns.TypeTXT); err == nil {
+		t.Fatal("expected an exchange error when the server is unreachable")
+	}
+}
 
 func TestDiscovery(t *testing.T) {
 	c, _ := newTestServer(t)
@@ -128,6 +214,20 @@ func TestCallError(t *testing.T) {
 	}
 	if e.Status != codec.StatusError || e.Error != "kaboom" {
 		t.Fatalf("envelope = %+v, want error kaboom", e)
+	}
+}
+
+// A call whose handler returns a nil envelope surfaces a generic error.
+func TestCallNilHandler(t *testing.T) {
+	c := startTestServer(t, &Handlers{
+		OnCall: func(*CallRequest) *codec.Envelope { return nil },
+	})
+	e, err := c.Call(testZone, "echo", []byte(`{}`), "")
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if e.Status != codec.StatusError || !strings.Contains(e.Error, "call handler returned nil") {
+		t.Fatalf("envelope = %+v, want error mentioning a nil handler", e)
 	}
 }
 
@@ -318,6 +418,42 @@ func TestAuthTamperedRejected(t *testing.T) {
 	e := callEnvelope(t, c, tampered)
 	if e.Status != codec.StatusError || e.Error == "" {
 		t.Fatalf("tampered call envelope = %+v, want a non-empty error", e)
+	}
+}
+
+// TestMultiQuestionNXDOMAIN covers ServeDNS's != 1 question guard. The miekg
+// server rejects multi-question messages before reaching the handler by
+// default, so we install an accept func that admits them.
+func TestMultiQuestionNXDOMAIN(t *testing.T) {
+	srv := NewServer(testZone, &Handlers{}).WithDiscovery("127.0.0.1.", 53)
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("bind udp: %v", err)
+	}
+	dnsSrv := &dns.Server{PacketConn: udpConn, Handler: srv.Handler(), MsgAcceptFunc: func(dns.Header) miedns.MsgAcceptAction { return miedns.MsgAccept }}
+	done := make(chan struct{})
+	go func() {
+		_ = dnsSrv.ActivateAndServe()
+		close(done)
+	}()
+	defer func() {
+		_ = dnsSrv.Shutdown()
+		<-done
+	}()
+	addr := udpConn.LocalAddr().String()
+
+	client := &miedns.Client{Net: "udp", Timeout: 2 * time.Second}
+	m := new(miedns.Msg)
+	m.SetQuestion(dns.Fqdn("echo.example."), dns.TypeTXT)
+	// Append a second question: SetQuestion replaces, so add the extra one
+	// directly to exercise the != 1 question guard in ServeDNS.
+	m.Question = append(m.Question, miedns.Question{Name: dns.Fqdn("boom.example."), Qtype: dns.TypeTXT})
+	resp, _, err := client.Exchange(m, addr)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if resp.Rcode != dns.RcodeNameError {
+		t.Fatalf("rcode = %d, want NXDOMAIN for multi-question", resp.Rcode)
 	}
 }
 

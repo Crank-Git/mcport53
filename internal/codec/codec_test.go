@@ -151,6 +151,18 @@ func TestParseCallNameErrors(t *testing.T) {
 	if _, err := ParseCallName([]string{"a", "echo", "call", "example"}); err == nil {
 		t.Fatal("expected error for missing nonce/zone")
 	}
+	// Signed call name with a nonce but no zone labels.
+	if _, err := ParseCallName([]string{"echo", "call", "signed", "nonce"}); err == nil {
+		t.Fatal("expected error for a call name with no zone after the nonce")
+	}
+	// Signed call name with a tool but no args to sign.
+	if _, err := ParseCallName([]string{"tool", "call", "signed", "nonce", "example"}); err == nil {
+		t.Fatal("expected error for a signed call name with no signature label")
+	}
+	// A call name whose args decode to invalid base32 (args precede the tool).
+	if _, err := ParseCallName([]string{"not-valid-base32!!", "tool", "call", "nonce", "example"}); err == nil {
+		t.Fatal("expected error for an undecodable args label")
+	}
 }
 
 func TestChunkNameRoundTrip(t *testing.T) {
@@ -265,6 +277,14 @@ func TestChunkPayload(t *testing.T) {
 	if got := ChunkPayload(nil, 4); got != nil {
 		t.Fatalf("empty payload should yield no chunks, got %v", got)
 	}
+	// A non-positive size falls back to the default ChunkSize (100).
+	long := bytes.Repeat([]byte("a"), 250)
+	if got := ChunkPayload(long, 0); len(got) != 3 {
+		t.Fatalf("ChunkPayload(long, 0) = %d chunks, want 3 (default size 100)", len(got))
+	}
+	if got := ChunkPayload(long, -1); len(got) != 3 {
+		t.Fatalf("ChunkPayload(long, -1) = %d chunks, want 3 (default size 100)", len(got))
+	}
 }
 
 func TestRandomIDsNonEmpty(t *testing.T) {
@@ -280,5 +300,92 @@ func TestRandomIDsNonEmpty(t *testing.T) {
 		if s == "" {
 			t.Fatalf("%s: empty id", name)
 		}
+	}
+}
+
+func TestParseEnvelopeError(t *testing.T) {
+	if _, err := ParseEnvelope([]byte("not json")); err == nil {
+		t.Fatal("expected a parse error for invalid JSON")
+	}
+}
+
+func TestParseEnvelopeDefaultsV(t *testing.T) {
+	e, err := ParseEnvelope([]byte(`{"status":"ok"}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if e.V != 1 {
+		t.Errorf("V = %d, want default 1", e.V)
+	}
+}
+
+func TestParseResultEnvelopeError(t *testing.T) {
+	if _, err := ParseResultEnvelope("not json"); err == nil {
+		t.Fatal("expected a parse error for invalid JSON")
+	}
+}
+
+func TestBuildCallNamePanics(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func()
+	}{
+		{"empty zone", func() { BuildCallName(nil, "echo", nil, "nonce", "") }},
+		{"empty tool", func() { BuildCallName([]string{"example"}, "", nil, "nonce", "") }},
+		{"empty nonce", func() { BuildCallName([]string{"example"}, "echo", nil, "", "") }},
+	}
+	for _, c := range cases {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s: expected a panic", c.name)
+				}
+			}()
+			c.run()
+		}()
+	}
+}
+
+func TestParseChunkNameErrors(t *testing.T) {
+	if _, _, _, err := ParseChunkName([]string{"foo", "bar"}); err == nil {
+		t.Error("expected error for a missing chunk label")
+	}
+	if _, _, _, err := ParseChunkName([]string{"chunk", "sess", "example"}); err == nil {
+		t.Error("expected error for a chunk label with no index")
+	}
+	if _, _, _, err := ParseChunkName([]string{"x", "sess", "chunk", "example"}); err == nil {
+		t.Error("expected error for a non-numeric chunk index")
+	}
+	// An empty chunk index is rejected.
+	if _, _, _, err := ParseChunkName([]string{"", "sess", "chunk", "example"}); err == nil {
+		t.Error("expected error for an empty chunk index")
+	}
+	// A chunk name with an empty zone suffix.
+	if _, _, _, err := ParseChunkName([]string{"0", "sess", "chunk"}); err == nil {
+		t.Error("expected error for a chunk name with no zone")
+	}
+	// A chunk name with an empty session.
+	if _, _, _, err := ParseChunkName([]string{"0", "", "chunk", "example"}); err == nil {
+		t.Error("expected error for a chunk name with no session")
+	}
+}
+
+func TestParseJobNameErrors(t *testing.T) {
+	if _, _, err := ParseJobName([]string{"job", "example"}); err == nil {
+		t.Error("expected error for a job label with no name")
+	}
+	// A job name with an empty job label.
+	if _, _, err := ParseJobName([]string{"", "job", "example"}); err == nil {
+		t.Error("expected error for an empty job label")
+	}
+}
+
+func TestRandomHexLength(t *testing.T) {
+	s, err := RandomHex(8)
+	if err != nil {
+		t.Fatalf("RandomHex: %v", err)
+	}
+	if len(s) != 16 {
+		t.Errorf("RandomHex(8) = %q, want 16 hex chars", s)
 	}
 }

@@ -6,6 +6,22 @@ import (
 	"time"
 )
 
+// TestReplayGuardDefaults checks that non-positive max/ttl fall back to the
+// package defaults.
+func TestReplayGuardDefaults(t *testing.T) {
+	g := NewReplayGuard(0, 0)
+	defer g.Close()
+	if g.max != DefaultReplayMaxEntries {
+		t.Errorf("max = %d, want default %d", g.max, DefaultReplayMaxEntries)
+	}
+	if g.ttl != DefaultReplayTTL {
+		t.Errorf("ttl = %v, want default %v", g.ttl, DefaultReplayTTL)
+	}
+	if !g.Check("10.0.0.1:53", "nonce-a", time.Now()) {
+		t.Fatal("guard with defaults should accept a fresh nonce")
+	}
+}
+
 func TestReplayFirstThenDuplicate(t *testing.T) {
 	g := NewReplayGuard(100, time.Minute)
 	defer g.Close()
@@ -78,6 +94,14 @@ func TestReplayTTLExpiry(t *testing.T) {
 	if !g.Check("10.0.0.1:53", "nonce-a", time.Now()) {
 		t.Fatal("nonce should be reusable after its TTL expires")
 	}
+}
+
+func TestReplayCloseIdempotent(t *testing.T) {
+	g := NewReplayGuard(100, time.Minute)
+	// Closing twice must not panic (the second close hits the non-blocking
+	// default branch once stop is already closed).
+	g.Close()
+	g.Close()
 }
 
 func TestReplayConcurrent(t *testing.T) {

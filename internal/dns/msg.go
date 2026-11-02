@@ -70,10 +70,18 @@ func extractTXT(msg *dns.Msg) (string, error) {
 	return b.String(), nil
 }
 
-// buildTXTResponse writes a single TXT answer holding txt into resp as an
-// authoritative reply to req. txt is base64-encoded before being placed in the
-// TXT string so the payload avoids the " and \ characters that the installed
-// miekg/dns TXT pack/unpack path mishandles (see extractTXT).
+// txtChunkSize is the largest base64 payload we place in a single TXT
+// character-string. It is 252: the largest multiple of 4 that fits the 255-byte
+// per-string limit (RFC 1035 §5.1), and a multiple of 4 so every split chunk
+// is still a complete, independently-decodable base64 string.
+const txtChunkSize = 252
+
+// buildTXTResponse writes TXT answers holding txt into resp as an authoritative
+// reply to req. txt is base64-encoded before being placed in one or more TXT
+// strings so the payload avoids the " and \ characters that the installed
+// miekg/dns TXT pack/unpack path mishandles (see extractTXT). A payload longer
+// than MaxTXTString is split across several TXT strings, each <= txtChunkSize
+// bytes, so it survives the 255-byte per-string limit (RFC 1035 §5.1).
 func buildTXTResponse(req, resp *dns.Msg, txt string) {
 	*resp = *reply(req)
 	resp.Authoritative = true
@@ -81,8 +89,25 @@ func buildTXTResponse(req, resp *dns.Msg, txt string) {
 	b64 := base64.StdEncoding.EncodeToString([]byte(txt))
 	resp.Answer = append(resp.Answer, &dns.TXT{
 		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
-		Txt: []string{b64},
+		Txt: splitTXTStrings(b64),
 	})
+}
+
+// splitTXTStrings splits s into consecutive <=txtChunkSize-byte chunks. s is
+// expected to be base64, whose length is always a multiple of 4; because
+// txtChunkSize is also a multiple of 4, every chunk (including the last) is a
+// complete base64 string that decodes on its own.
+func splitTXTStrings(s string) []string {
+	var out []string
+	for len(s) > 0 {
+		n := txtChunkSize
+		if n > len(s) {
+			n = len(s)
+		}
+		out = append(out, s[:n])
+		s = s[n:]
+	}
+	return out
 }
 
 // buildEmptyResponse writes an authoritative, empty answer to req.
