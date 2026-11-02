@@ -23,11 +23,15 @@ func main() {
 		tool    = flag.String("tool", "", "tool name to call (omit to list tools)")
 		args    = flag.String("args", "{}", "JSON arguments for the tool call")
 		timeout = flag.Duration("timeout", 5*time.Second, "per-query timeout")
+		doh     = flag.String("doh", "", "DNS-over-HTTPS endpoint (RFC 8484); when set, queries go here instead of --server (protocol §12)")
 	)
 	flag.Parse()
 
 	agent := mcp.NewAgent(*server, *zone)
 	agent.SetTimeout(*timeout)
+	if *doh != "" {
+		agent.WithDoH(*doh)
+	}
 
 	if *tool == "" {
 		if err := listTools(agent); err != nil {

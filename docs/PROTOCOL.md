@@ -262,8 +262,22 @@ prevents replay. Nonces also defeat caching (§6) because every name is unique.
 - **Message format:** standard DNS `QUERY` with `RD=1`, and `ANSWER` RRsets. No
   TSIG required (HMAC is applied at the application layer per §7), though TSIG can
   be layered on for transport integrity.
-- **Over DoH/DoT/DoQ:** the same query names work over encrypted DNS, giving
-  privacy + the same egress-friendly footprint.
+- **Over DoH (resolver path):** the same query names work over encrypted DNS,
+  giving privacy + the same egress-friendly footprint. In a real deployment the
+  client reaches the authoritative server through a normal resolver rather than
+  opening a direct UDP/53 socket. Point the client at a DNS-over-HTTPS endpoint
+  (RFC 8484) with `--doh`:
+
+  ```bash
+  go run ./cmd/mcp53-client --doh https://dns.example.com/dns-query \
+    --zone example. --tool echo --args '{"text":"hi"}'
+  ```
+
+  `--doh` replaces `--server`: every query is sent to the DoH endpoint instead of
+  a direct socket. This is the cleanest forwarding path — the resolver at the
+  server host answers/forwards the `_mcp._udp.example.` query to the authoritative
+  server, and the client receives an encrypted, egress-friendly response. The
+  `--server` UDP/TCP address is still used when `--doh` is not set.
 
 ---
 
@@ -295,8 +309,6 @@ until `done`/`session=s2`, then fetches the session result.
 
 - **Secret distribution & identity.** Move beyond shared secret: per-tool keys,
   delegated discovery with auth (e.g. signed discovery documents).
-- **Forwarding/resolver path.** Document how to reach the authoritative server
-  through a normal resolver (DNS-over-HTTPS to the server host is the cleanest).
 - **Compression.** zstd/gzip inside `result` for very large payloads.
 - **Pagination cursor** vs. fixed chunk indices for streaming results.
 - **TLS/TSIG** for transport-layer integrity as a complement to application HMAC.

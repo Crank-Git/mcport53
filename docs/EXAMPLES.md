@@ -133,6 +133,22 @@ go run ./cmd/mcp53-client --server 198.51.100.53 --zone example. \
 
 `--server` is a `host:port` DNS address, not a hostname.
 
+### 7.1. Through DNS-over-HTTPS
+
+The cleanest way to reach the authoritative server through a normal resolver is
+DNS-over-HTTPS (`--doh`, RFC 8484). The client sends every query to a DoH
+endpoint instead of opening a direct UDP/53 socket, so the resolver at the server
+host forwards the query to the authoritative server while the transport stays
+encrypted and egress-friendly. Point `--doh` at the endpoint and drop `--server`:
+
+```bash
+go run ./cmd/mcp53-client --doh https://dns.example.com/dns-query \
+  --zone example. --tool echo --args '{"text":"hi"}'
+```
+
+Discovery works the same way: the client's discovery query is sent to the DoH
+endpoint, which returns the SRV + TXT records for the zone.
+
 ## Related
 
 - [Protocol spec](PROTOCOL.md) — naming, encoding, envelopes, auth.

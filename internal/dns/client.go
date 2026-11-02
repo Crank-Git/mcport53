@@ -1,9 +1,14 @@
 package dns
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -19,6 +24,8 @@ type Client struct {
 	dc           *dns.Client
 	signer       func(tool, nonce string, args []byte, ts int64) string // optional per-call signer
 	discoveryKey []byte                                                 // optional key to verify signed discovery documents (protocol §8)
+	dohURL       string                                                 // optional DoH endpoint (RFC 8484); when set, queries go here (protocol §12)
+	httpClient   *http.Client                                           // used when dohURL is set
 }
 
 // NewClient builds a Client for the server at serverAddr ("host:port"). The
@@ -37,6 +44,9 @@ func NewClient(serverAddr string) *Client {
 func (c *Client) SetTimeout(d time.Duration) {
 	c.timeout = d
 	c.dc.Timeout = d
+	if c.httpClient != nil {
+		c.httpClient.Timeout = d
+	}
 }
 
 // SetNet sets the transport (e.g. "udp", "tcp", "tls", "https").
@@ -51,7 +61,7 @@ func (c *Client) Discovery(zone string) (*DiscoveryResponse, error) {
 	m.SetQuestion(dns.Fqdn("_mcp._udp."+strings.TrimSuffix(zone, ".")), dns.TypeSRV)
 	m.RecursionDesired = false
 
-	resp, _, err := c.dc.Exchange(m, c.server)
+	resp, err := c.exchange(m)
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +96,16 @@ func (c *Client) WithSigner(signer func(tool, nonce string, args []byte, ts int6
 // signature does not verify.
 func (c *Client) WithDiscoveryKey(key []byte) *Client {
 	c.discoveryKey = key
+	return c
+}
+
+// WithDoH configures the client to reach the server over DNS-over-HTTPS (RFC 8484)
+// via endpoint, for example "https://dns.example/dns-query". When set, every query
+// is sent to the DoH endpoint instead of the direct --server address (protocol §12),
+// which is how an agent reaches the authoritative server through a normal resolver.
+func (c *Client) WithDoH(endpoint string) *Client {
+	c.dohURL = endpoint
+	c.httpClient = &http.Client{Timeout: c.timeout}
 	return c
 }
 
@@ -159,8 +179,51 @@ func (c *Client) Query(name string, qtype uint16) (*dns.Msg, error) {
 	m := new(dns.Msg)
 	m.SetQuestion(name, qtype)
 	m.RecursionDesired = false
+	return c.exchange(m)
+}
+
+// exchange sends m and returns the response. When the client is configured with a
+// DoH endpoint (see WithDoH) the query goes there (protocol §12); otherwise it is
+// sent directly to the server address over UDP/TCP.
+func (c *Client) exchange(m *dns.Msg) (*dns.Msg, error) {
+	if c.dohURL != "" {
+		return c.dohExchange(m)
+	}
 	resp, _, err := c.dc.Exchange(m, c.server)
 	return resp, err
+}
+
+// dohExchange performs a single DNS-over-HTTPS query (RFC 8484) using an HTTP GET
+// with a base64url-encoded question. The response body is the raw DNS message.
+func (c *Client) dohExchange(m *dns.Msg) (*dns.Msg, error) {
+	packed, err := m.Pack()
+	if err != nil {
+		return nil, fmt.Errorf("dns: packing DoH query: %w", err)
+	}
+	query := url.Values{}
+	query.Set("dns", base64.RawURLEncoding.EncodeToString(packed))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, c.dohURL+"?"+query.Encode(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("dns: building DoH request: %w", err)
+	}
+	req.Header.Set("Accept", "application/dns-message")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("dns: DoH request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("dns: DoH endpoint returned %s", resp.Status)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("dns: reading DoH response: %w", err)
+	}
+	out := new(dns.Msg)
+	if err := out.Unpack(body); err != nil {
+		return nil, fmt.Errorf("dns: unpacking DoH response: %w", err)
+	}
+	return out, nil
 }
 
 func (c *Client) queryEnvelope(name string, qtype uint16) (*codec.Envelope, error) {
