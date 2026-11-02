@@ -501,6 +501,98 @@ func TestMultiQuestionNXDOMAIN(t *testing.T) {
 	}
 }
 
+// A signed discovery document verifies when the client holds the matching key.
+func TestDiscoveryVerifiedOK(t *testing.T) {
+	key := []byte("discovery-root-key")
+	doc := &DiscoveryResponse{Version: 1, Tools: []Tool{{Name: "echo"}}}
+	b, _ := json.Marshal(doc)
+	sig := auth.Sign(key, "discovery", "", b, 0)
+	doc.Sig = sig
+	out, _ := json.Marshal(doc)
+
+	c := startRawServer(t, func(req *dns.Msg) *dns.Msg {
+		resp := reply(req)
+		resp.Rcode = dns.RcodeSuccess
+		resp.Answer = []dns.RR{&dns.TXT{
+			Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
+			Txt: []string{b64(string(out))},
+		}}
+		return resp
+	})
+	if _, err := c.WithDiscoveryKey(key).Discovery(testZone); err != nil {
+		t.Fatalf("verified discovery: %v", err)
+	}
+}
+
+// A tampered discovery document fails verification.
+func TestDiscoveryTamperedRejected(t *testing.T) {
+	key := []byte("discovery-root-key")
+	doc := &DiscoveryResponse{Version: 1, Tools: []Tool{{Name: "echo"}}}
+	b, _ := json.Marshal(doc)
+	sig := auth.Sign(key, "discovery", "", b, 0)
+	doc.Sig = sig
+
+	c := startRawServer(t, func(req *dns.Msg) *dns.Msg {
+		resp := reply(req)
+		resp.Rcode = dns.RcodeSuccess
+		// Tamper: advertise an extra tool. The signature no longer matches.
+		tampered := &DiscoveryResponse{Version: 1, Tools: []Tool{{Name: "echo"}, {Name: "boom"}}}
+		tampered.Sig = sig
+		tamperedOut, _ := json.Marshal(tampered)
+		resp.Answer = []dns.RR{&dns.TXT{
+			Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
+			Txt: []string{b64(string(tamperedOut))},
+		}}
+		return resp
+	})
+	if _, err := c.WithDiscoveryKey(key).Discovery(testZone); err == nil {
+		t.Fatal("expected a verification failure for a tampered discovery document")
+	}
+}
+
+// An unsigned discovery document fails verification when a key is configured.
+func TestDiscoveryUnsignedRejected(t *testing.T) {
+	key := []byte("discovery-root-key")
+	doc := &DiscoveryResponse{Version: 1}
+	out, _ := json.Marshal(doc) // no Sig field
+
+	c := startRawServer(t, func(req *dns.Msg) *dns.Msg {
+		resp := reply(req)
+		resp.Rcode = dns.RcodeSuccess
+		resp.Answer = []dns.RR{&dns.TXT{
+			Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
+			Txt: []string{b64(string(out))},
+		}}
+		return resp
+	})
+	if _, err := c.WithDiscoveryKey(key).Discovery(testZone); err == nil {
+		t.Fatal("expected a failure for an unsigned discovery document")
+	}
+}
+
+// WithSigner signs calls automatically; the server sees a valid signature.
+func TestCallSignerRoundTrip(t *testing.T) {
+	secret := []byte("shared-top-secret")
+	c := startTestServer(t, &Handlers{
+		OnCall: func(req *CallRequest) *codec.Envelope {
+			return codec.OK(req.Tool, codec.TextResult("text/plain", string(req.Args)), 0)
+		},
+		OnVerify: func(req *CallRequest) error {
+			return auth.Check(secret, req.Sig, req.Tool, req.Nonce, req.Args, time.Now(), time.Minute)
+		},
+	})
+	c.WithSigner(func(tool, nonce string, args []byte, ts int64) string {
+		return auth.Sign(secret, tool, nonce, args, ts)
+	})
+	e, err := c.Call(testZone, "echo", []byte(`{"text":"hi"}`), "")
+	if err != nil {
+		t.Fatalf("auto-signed call: %v", err)
+	}
+	if e.Status != codec.StatusOK {
+		t.Fatalf("status = %q, want ok", e.Status)
+	}
+}
+
 func TestAuthReplayRejected(t *testing.T) {
 	secret := []byte("shared-top-secret")
 	c := authServer(t, secret)

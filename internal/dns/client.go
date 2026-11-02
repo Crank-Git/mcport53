@@ -2,19 +2,23 @@ package dns
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/Crank-Git/mcport53/internal/auth"
 	"github.com/Crank-Git/mcport53/internal/codec"
 	"github.com/miekg/dns"
 )
 
 // Client is a DNS client for an MCPort53 server.
 type Client struct {
-	server  string // host:port, e.g. "127.0.0.1:53"
-	timeout time.Duration
-	dc      *dns.Client
+	server       string // host:port, e.g. "127.0.0.1:53"
+	timeout      time.Duration
+	dc           *dns.Client
+	signer       func(tool, nonce string, args []byte, ts int64) string // optional per-call signer
+	discoveryKey []byte                                                 // optional key to verify signed discovery documents (protocol §8)
 }
 
 // NewClient builds a Client for the server at serverAddr ("host:port"). The
@@ -62,7 +66,54 @@ func (c *Client) Discovery(zone string) (*DiscoveryResponse, error) {
 	if err := json.Unmarshal([]byte(txt), &doc); err != nil {
 		return nil, fmt.Errorf("dns: parsing discovery: %w", err)
 	}
+	if err := verifyDiscovery(c.discoveryKey, &doc); err != nil {
+		return nil, err
+	}
 	return &doc, nil
+}
+
+// WithSigner installs a per-call signer. When set, Call signs each call with a
+// fresh nonce coordinated with the query (see Call). The signer receives the
+// tool, nonce, raw argument bytes, and a Unix-seconds timestamp and returns a
+// signature label (for example (*auth.KeyRegistry).Sign).
+func (c *Client) WithSigner(signer func(tool, nonce string, args []byte, ts int64) string) *Client {
+	c.signer = signer
+	return c
+}
+
+// WithDiscoveryKey installs the key used to verify signed discovery documents
+// (protocol §8). When set, Discovery rejects documents that are unsigned or whose
+// signature does not verify.
+func (c *Client) WithDiscoveryKey(key []byte) *Client {
+	c.discoveryKey = key
+	return c
+}
+
+// verifyDiscovery checks that doc carries a valid signature over its content.
+// It is a no-op when no key is configured. The signature is a pure content
+// signature: the document is signed with a fixed nonce and timestamp, so the
+// client reproduces the signed bytes by clearing the Sig field and re-marshaling
+// (Go marshals struct fields in declaration order, matching the signer).
+func verifyDiscovery(key []byte, doc *DiscoveryResponse) error {
+	if key == nil {
+		return nil
+	}
+	sig := doc.Sig
+	if sig == "" {
+		return errors.New("dns: discovery document is not signed")
+	}
+	// Marshal a copy with the signature cleared so the passed-in doc is not
+	// mutated and the caller still observes the signature it received.
+	unsigned := *doc
+	unsigned.Sig = ""
+	b, err := json.Marshal(unsigned)
+	if err != nil {
+		return fmt.Errorf("dns: re-serializing discovery for verification: %w", err)
+	}
+	if !auth.Verify(key, sig, "discovery", "", b, 0) {
+		return errors.New("dns: discovery document signature invalid")
+	}
+	return nil
 }
 
 // Schema queries <tool>.schema.<zone> and returns the tool input schema
@@ -74,11 +125,17 @@ func (c *Client) Schema(zone, tool string) (*codec.Envelope, error) {
 
 // Call issues a tool call and returns the result envelope (protocol §2.3).
 //
-// sig is an optional HMAC signature label; pass "" for an unsigned call.
+// sig is an optional HMAC signature label; pass "" for an unsigned call. When a
+// signer is installed (see WithSigner) and sig is empty, the client signs the
+// call itself with a fresh nonce, coordinating the nonce with the query so the
+// signature is valid on the wire.
 func (c *Client) Call(zone, tool string, args []byte, sig string) (*codec.Envelope, error) {
 	nonce, err := codec.RandomNonce()
 	if err != nil {
 		return nil, err
+	}
+	if sig == "" && c.signer != nil {
+		sig = c.signer(tool, nonce, args, time.Now().Unix())
 	}
 	labels := codec.BuildCallName(zoneLabels(zone), tool, args, nonce, sig)
 	return c.queryEnvelope(LabelsToName(labels), dns.TypeTXT)
