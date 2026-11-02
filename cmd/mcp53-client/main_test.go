@@ -67,3 +67,21 @@ func TestRenderResultBadBase64(t *testing.T) {
 		t.Fatal("expected a base64 decode error")
 	}
 }
+
+// parseArgs passes valid JSON through unchanged as raw bytes.
+func TestParseArgsValid(t *testing.T) {
+	got, err := parseArgs(`{"text":"hi"}`)
+	if err != nil {
+		t.Fatalf("parseArgs: %v", err)
+	}
+	if string(got) != `{"text":"hi"}` {
+		t.Errorf("parseArgs = %q, want raw JSON", got)
+	}
+}
+
+// parseArgs rejects arguments that are not valid JSON.
+func TestParseArgsInvalid(t *testing.T) {
+	if _, err := parseArgs("not json"); err == nil {
+		t.Fatal("expected an error for invalid JSON args")
+	}
+}
