@@ -389,3 +389,93 @@ func TestRandomHexLength(t *testing.T) {
 		t.Errorf("RandomHex(8) = %q, want 16 hex chars", s)
 	}
 }
+
+func TestCursorNameRoundTrip(t *testing.T) {
+	zone := []string{"example"}
+	name := CursorName(zone, "sess123", "abc123cursor")
+	cursor, session, z, err := ParseCursorName(name)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cursor != "abc123cursor" || session != "sess123" || !equalStrings(z, zone) {
+		t.Fatalf("got cursor=%q session=%q zone=%v", cursor, session, z)
+	}
+}
+
+func TestCursorNameErrors(t *testing.T) {
+	// Missing session (cursor directly before the chunk label).
+	if _, _, _, err := ParseCursorName([]string{"cursor", "chunk", "example"}); err == nil {
+		t.Error("expected error for a cursor name with no session")
+	}
+	// Missing zone.
+	if _, _, _, err := ParseCursorName([]string{"cursor", "sess"}); err == nil {
+		t.Error("expected error for a cursor name with no zone")
+	}
+	// An empty cursor is rejected.
+	if _, _, _, err := ParseCursorName([]string{"", "sess", "chunk", "example"}); err == nil {
+		t.Error("expected error for a cursor name with an empty cursor")
+	}
+}
+
+func TestParseResultEnvelopeFromUncompressed(t *testing.T) {
+	js, _ := JSONResult(map[string]any{"ok": true})
+	env := OK("echo", js, 2)
+	// No compression marker: behaves like ParseResultEnvelope.
+	if env.Compression != "" {
+		t.Fatalf("unexpected compression marker: %q", env.Compression)
+	}
+	re, err := ParseResultEnvelopeFrom(env)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if re.Kind != KindJSON {
+		t.Fatalf("kind = %q, want json", re.Kind)
+	}
+}
+
+func TestParseResultEnvelopeFromCompressed(t *testing.T) {
+	inner, _ := JSONResult(map[string]any{"big": bytes.Repeat([]byte("z"), 20)})
+	// Compress the serialized inner result, as a server would (protocol §4.4).
+	enc, err := CompressResult(CompressionGzip, []byte(inner))
+	if err != nil {
+		t.Fatalf("compress: %v", err)
+	}
+	env := NewEnvelope(StatusOK)
+	env.Tool = "echo"
+	env.Result = enc
+	env.Compression = string(CompressionGzip)
+	env.Ms = 4
+	b, _ := env.Marshal()
+	got, err := ParseEnvelope(b)
+	if err != nil {
+		t.Fatalf("parse envelope: %v", err)
+	}
+	if got.Compression != string(CompressionGzip) {
+		t.Fatalf("compression = %q, want gzip", got.Compression)
+	}
+	re, err := ParseResultEnvelopeFrom(got)
+	if err != nil {
+		t.Fatalf("decompress+parse: %v", err)
+	}
+	if re.Kind != KindJSON {
+		t.Fatalf("kind = %q, want json", re.Kind)
+	}
+	var gotMap map[string]any
+	if err := json.Unmarshal([]byte(re.Value), &gotMap); err != nil {
+		t.Fatalf("result not valid JSON after decompress: %v", err)
+	}
+}
+
+func TestParseResultEnvelopeFromNil(t *testing.T) {
+	if _, err := ParseResultEnvelopeFrom(nil); err == nil {
+		t.Fatal("expected an error for a nil envelope")
+	}
+}
+
+func TestParseResultEnvelopeFromBadCompression(t *testing.T) {
+	env := OK("echo", `{"kind":"json","value":{}}`, 0)
+	env.Compression = "gzip"
+	if _, err := ParseResultEnvelopeFrom(env); err == nil {
+		t.Fatal("expected an error decompressing invalid gzip data")
+	}
+}

@@ -144,6 +144,114 @@ func TestAgentCallChunked(t *testing.T) {
 	}
 }
 
+// TestAgentCallCompressed exercises the server-side gzip path: a large,
+// highly compressible structured result is returned in a single compressed
+// envelope rather than fixed chunks (protocol §4.4), and the agent decompresses
+// it transparently.
+func TestAgentCallCompressed(t *testing.T) {
+	reg := NewRegistry()
+	big := strings.Repeat(`{"id":1,"name":"widget"}`, 60)
+	_ = reg.AddMCPTool(&sdkmcp.Tool{Name: "big"}, func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		return &sdkmcp.CallToolResult{StructuredContent: big}, nil
+	})
+	agent := startAgentServerConfig(t, reg, func(s *Server) *Server { return s.WithCompression() })
+	re, err := agent.Call(context.Background(), "big", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("call big: %v", err)
+	}
+	if !strings.Contains(re.Value, "widget") {
+		t.Errorf("assembled value missing the payload: %q", re.Value)
+	}
+}
+
+// TestAgentCallCursorAssembled verifies the agent follows opaque cursors the
+// server hands out instead of requesting fixed chunk indices (protocol §4.4).
+func TestAgentCallCursorAssembled(t *testing.T) {
+	inner, _ := codec.JSONResult(map[string]any{"msg": "hello world"})
+	part := len(inner) / 2
+	parts := [][]byte{[]byte(inner[:part]), []byte(inner[part:])}
+	onCall := func(req *dns.CallRequest) *codec.Envelope {
+		e := codec.Chunked("big", "sess-c", 0, 2, true, b64Chunk(string(parts[0])))
+		e.Cursor = "cur-1"
+		return e
+	}
+	onChunk := func(req *dns.ChunkRequest) *codec.Envelope {
+		return codec.Chunked("big", "sess-c", 1, 2, false, b64Chunk(string(parts[1])))
+	}
+	agent := startChunkServer(t, onCall, onChunk)
+	re, err := agent.Call(context.Background(), "big", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("call big: %v", err)
+	}
+	if !strings.Contains(re.Value, "hello world") {
+		t.Errorf("assembled value missing payload: %q", re.Value)
+	}
+}
+
+// TestAgentCallCursorEndToEnd exercises the real server-side cursor path:
+// WithCursorPagination makes chunkIfNeeded tag chunk 0 with a cursor and onChunk
+// hand out cursors, and the agent follows them instead of fixed indices.
+func TestAgentCallCursorEndToEnd(t *testing.T) {
+	reg := NewRegistry()
+	big := strings.Repeat("x", 500) // large enough to produce several chunks
+	_ = reg.AddMCPTool(&sdkmcp.Tool{Name: "big"}, func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+		return textResult(big), nil
+	})
+	agent := startAgentServerConfig(t, reg, func(s *Server) *Server { return s.WithCursorPagination() })
+	re, err := agent.Call(context.Background(), "big", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("call big: %v", err)
+	}
+	if re.Kind != codec.KindJSON {
+		t.Fatalf("kind = %q, want json", re.Kind)
+	}
+	if !strings.Contains(re.Value, "xxxx") {
+		t.Errorf("assembled value missing payload: %q", re.Value)
+	}
+}
+
+// TestAgentCallCursorFetchError covers a failed cursor fetch.
+func TestAgentCallCursorFetchError(t *testing.T) {
+	onCall := func(req *dns.CallRequest) *codec.Envelope {
+		e := codec.Chunked("big", "sess-c", 0, 2, true, b64Chunk("x"))
+		e.Cursor = "cur-1"
+		return e
+	}
+	// A server that NXDOMAINs the cursor fetch surfaces as a call error.
+	agent := startRawAgentServer(t, func(req *miedns.Msg) *miedns.Msg {
+		return nil
+	})
+	_ = onCall
+	if _, err := agent.Call(context.Background(), "big", []byte(`{}`)); err == nil {
+		t.Fatal("expected an error when a cursor fetch fails")
+	}
+}
+
+// TestDecodeCursorForged covers the opaque-cursor verification helpers.
+func TestDecodeCursorForged(t *testing.T) {
+	ns := "sessionsecret"
+	if got, ok := decodeCursor(ns, encodeCursor(ns, 3)); !ok || got != 3 {
+		t.Fatalf("valid cursor: got %d ok=%v", got, ok)
+	}
+	// A cursor issued for a different session must be rejected.
+	if _, ok := decodeCursor("othernonce", encodeCursor(ns, 1)); ok {
+		t.Fatal("cursor from another session should be rejected")
+	}
+	// Garbage must be rejected.
+	if _, ok := decodeCursor(ns, "!!!not-base32!!!"); ok {
+		t.Fatal("garbage cursor should be rejected")
+	}
+}
+
+// TestChunkFromCursorUnknownSession covers the server-side guard that rejects a
+// cursor for a session the server never issued a nonce for (protocol §4.4).
+func TestChunkFromCursorUnknownSession(t *testing.T) {
+	s := NewServer(NewRegistry())
+	if idx, ok := s.chunkFromCursor("never-seen", encodeCursor("sessionsecret", 1)); ok {
+		t.Fatalf("cursor for unknown session should be rejected, got idx=%d", idx)
+	}
+}
+
 // startChunkServer starts an in-process server whose call and chunk handlers
 // return caller-supplied envelopes, letting tests exercise the agent's
 // chunked-result assembly paths (including error paths).

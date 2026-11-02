@@ -40,11 +40,14 @@ type CallRequest struct {
 	Caller string
 }
 
-// ChunkRequest is a decoded result-chunk query (protocol §2.4).
+// ChunkRequest is a decoded result-chunk query (protocol §2.4 / §4.4).
 type ChunkRequest struct {
-	Chunk   int
+	Chunk   int // fixed chunk index (protocol §2.4); set when Cursor is empty
 	Session string
 	Zone    string
+	// Cursor is an opaque pagination token (protocol §4.4). When non-empty the
+	// caller is fetching by cursor rather than by fixed index.
+	Cursor string
 }
 
 // Handlers implements the application logic a Server dispatches to. Every field
@@ -188,6 +191,17 @@ func hasLabel(labels []string, want string) bool {
 	return false
 }
 
+// indexOf returns the position of the first label equal (case-insensitively) to
+// want, or -1. It is used to locate structural labels such as "chunk".
+func indexOf(labels []string, want string) int {
+	for i, l := range labels {
+		if strings.EqualFold(l, want) {
+			return i
+		}
+	}
+	return -1
+}
+
 // callerAddr returns the host portion of a remote address, used as the caller
 // identity for per-caller replay protection. The ephemeral source port changes
 // on every dial, so the identity is the IP alone.
@@ -262,9 +276,9 @@ func (s *Server) serveCall(r, m *dns.Msg, labels []string, caller string) {
 }
 
 func (s *Server) serveChunk(r, m *dns.Msg, labels []string) {
-	idx, session, _, err := codec.ParseChunkName(labels)
-	if err != nil {
-		s.errResp(r, m, "", err.Error())
+	i := indexOf(labels, codec.LabelChunk)
+	if i < 1 {
+		s.errResp(r, m, "", "codec: malformed chunk name")
 		return
 	}
 	h := s.handlers
@@ -272,7 +286,22 @@ func (s *Server) serveChunk(r, m *dns.Msg, labels []string) {
 		s.errResp(r, m, "", "server: no chunk handler")
 		return
 	}
-	req := &ChunkRequest{Chunk: idx, Session: session, Zone: s.zone}
+	// A numeric label before "chunk" is a fixed index; anything else is an
+	// opaque cursor (protocol §4.4). Cursors are base32 (alphabet a-z2-7), so
+	// they are never purely numeric and never collide with an index.
+	idx, session, _, err := codec.ParseChunkName(labels)
+	if err == nil {
+		req := &ChunkRequest{Chunk: idx, Session: session, Zone: s.zone}
+		e := h.OnChunk(req)
+		buildTXTResponse(r, m, envelopeTXT(e))
+		return
+	}
+	cursor, session, _, err := codec.ParseCursorName(labels)
+	if err != nil {
+		s.errResp(r, m, "", err.Error())
+		return
+	}
+	req := &ChunkRequest{Cursor: cursor, Session: session, Zone: s.zone}
 	e := h.OnChunk(req)
 	buildTXTResponse(r, m, envelopeTXT(e))
 }
