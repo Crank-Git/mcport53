@@ -1,5 +1,40 @@
 # mcport53
 
-MCP tools reachable over DNS. An agent whose tools work anywhere port 53 gets out.
+**MCP tools reachable over DNS.** An agent whose tools work anywhere port 53 gets
+out — behind captive portals, locked-down egress, and network-restricted
+environments.
 
-> Initial commit — branch scaffold only. Full protocol, implementation, and docs in progress.
+MCPort53 turns MCP tool calls into DNS queries and results into DNS responses.
+Because outbound DNS (UDP/TCP **port 53**) is almost always permitted, you can
+reach tools in places where HTTP, websockets, or raw TCP cannot.
+
+- 📖 **Protocol spec:** [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
+- 🧩 **Encoding:** DNS-safe base32 labels, chunked to DNS limits
+- 🔍 **Discovery:** SRV + TXT listing tools and schemas
+- ⚡ **Calls:** `<args>.<tool>.call.<zone>` → TXT result
+- 📦 **Large/long results:** chunked sessions + job polling
+- 🔒 **Auth:** optional HMAC signature + nonce (replay protection)
+
+## Quick start
+
+```bash
+# Run the reference server (exposes example tools over DNS)
+go run ./cmd/mcp53-server --zone example --port 5353
+
+# Query it (client)
+go run ./cmd/mcp53-client --server dns.example --tool echo --args '{"text":"hi"}'
+```
+
+See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the full protocol and
+[`docs/EXAMPLES.md`](docs/EXAMPLES.md) for end-to-end walkthroughs.
+
+## Branch model
+
+- **`dev`** is the primary/default branch.
+- **`main`** is the secondary branch.
+- All work happens on a feature branch off `dev` and lands via a **Pull Request
+  into `dev`**. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
