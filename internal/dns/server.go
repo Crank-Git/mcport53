@@ -2,6 +2,7 @@ package dns
 
 import (
 	"encoding/json"
+	"net"
 	"strings"
 
 	"github.com/Crank-Git/mcport53/internal/codec"
@@ -29,6 +30,9 @@ type CallRequest struct {
 	Nonce string
 	Sig   string
 	Zone  string
+	// Caller identifies the query origin (the remote network address), used by
+	// OnVerify for per-caller replay protection (protocol §7.2).
+	Caller string
 }
 
 // ChunkRequest is a decoded result-chunk query (protocol §2.4).
@@ -46,6 +50,13 @@ type Handlers struct {
 	OnSchema    func(tool string) *codec.Envelope
 	OnChunk     func(req *ChunkRequest) *codec.Envelope
 	OnJob       func(job string) *codec.Envelope
+
+	// OnVerify optionally authenticates a call before it is executed (protocol
+	// §7). When non-nil it is invoked for every call, including unsigned ones,
+	// and must return nil to allow the call. A common implementation verifies
+	// an HMAC signature and enforces one-time nonces via auth.ReplayGuard; it
+	// should reject unsigned calls (req.Sig == "") unless signing is optional.
+	OnVerify func(req *CallRequest) error
 }
 
 // Server is an authoritative DNS server for a tool zone.
@@ -101,6 +112,7 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		_ = w.WriteMsg(m)
 		return
 	}
+	caller := callerAddr(w.RemoteAddr())
 
 	switch {
 	case isDiscovery(prefix):
@@ -108,7 +120,7 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	case isSchema(prefix):
 		s.serveSchema(r, m, prefix)
 	case isCall(prefix):
-		s.serveCall(r, m, labels)
+		s.serveCall(r, m, labels, caller)
 	case isChunk(prefix):
 		s.serveChunk(r, m, labels)
 	case isJob(prefix):
@@ -171,6 +183,19 @@ func hasLabel(labels []string, want string) bool {
 	return false
 }
 
+// callerAddr returns the host portion of a remote address, used as the caller
+// identity for per-caller replay protection. The ephemeral source port changes
+// on every dial, so the identity is the IP alone.
+func callerAddr(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(addr.String()); err == nil {
+		return host
+	}
+	return addr.String()
+}
+
 func (s *Server) serveDiscovery(r, m *dns.Msg) {
 	h := s.handlers
 	if h.OnDiscovery == nil {
@@ -205,7 +230,7 @@ func (s *Server) serveSchema(r, m *dns.Msg, prefix []string) {
 	buildTXTResponse(r, m, envelopeTXT(e))
 }
 
-func (s *Server) serveCall(r, m *dns.Msg, labels []string) {
+func (s *Server) serveCall(r, m *dns.Msg, labels []string, caller string) {
 	cn, err := codec.ParseCallName(labels)
 	if err != nil {
 		s.errResp(r, m, "", err.Error())
@@ -216,7 +241,13 @@ func (s *Server) serveCall(r, m *dns.Msg, labels []string) {
 		s.errResp(r, m, cn.Tool, "server: no call handler")
 		return
 	}
-	req := &CallRequest{Tool: cn.Tool, Args: cn.Args, Nonce: cn.Nonce, Sig: cn.Sig, Zone: s.zone}
+	req := &CallRequest{Tool: cn.Tool, Args: cn.Args, Nonce: cn.Nonce, Sig: cn.Sig, Zone: s.zone, Caller: caller}
+	if h.OnVerify != nil {
+		if err := h.OnVerify(req); err != nil {
+			s.errResp(r, m, cn.Tool, err.Error())
+			return
+		}
+	}
 	e := h.OnCall(req)
 	if e == nil {
 		s.errResp(r, m, cn.Tool, "call handler returned nil")
