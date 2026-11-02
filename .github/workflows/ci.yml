@@ -16,17 +16,28 @@ jobs:
         with:
           go-version: '1.27'
 
+      - name: Determine Go sources
+        id: src
+        run: |
+          count=$(git ls-files '*.go' | wc -l | tr -d ' ')
+          echo "go_files=$count" >> "$GITHUB_OUTPUT"
+
       - name: Download modules
+        if: steps.src.outputs.go_files != '0'
         run: go mod download
 
       - name: Build
+        if: steps.src.outputs.go_files != '0'
         run: go build ./...
 
       - name: Vet
+        if: steps.src.outputs.go_files != '0'
         run: go vet ./...
 
       - name: Gofmt
-        run: test -z "$(gofmt -l ./...)"
+        if: steps.src.outputs.go_files != '0'
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
 
       - name: Test
+        if: steps.src.outputs.go_files != '0'
         run: go test ./...
