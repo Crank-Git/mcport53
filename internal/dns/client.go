@@ -23,7 +23,9 @@ func NewClient(serverAddr string) *Client {
 	return &Client{
 		server:  serverAddr,
 		timeout: 2 * time.Second,
-		dc:      &dns.Client{Net: "udp", Timeout: 2 * time.Second},
+		// Read large responses (chunked call results exceed the 512-byte UDP
+		// minimum) into a bigger buffer so they are not truncated on the wire.
+		dc: &dns.Client{Net: "udp", Timeout: 2 * time.Second, UDPSize: dns.MinMsgSize + 4096},
 	}
 }
 
