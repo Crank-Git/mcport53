@@ -21,6 +21,11 @@ type Tool struct {
 type DiscoveryResponse struct {
 	Version int    `json:"version"`
 	Tools   []Tool `json:"tools"`
+	// Sig is an optional application-layer signature over the document's content
+	// (protocol §8). When present, clients that hold the matching key can verify
+	// the document's authenticity and integrity. It is omitted from the signed
+	// content itself.
+	Sig string `json:"sig,omitempty"`
 }
 
 // CallRequest is a decoded tool call received on a DNS query (protocol §2.3).

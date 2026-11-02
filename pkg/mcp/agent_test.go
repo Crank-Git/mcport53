@@ -31,8 +31,17 @@ const agentZone = "agent.example."
 // startAgentServer starts an in-process authoritative server for agentZone
 // backed by the given registry and returns an Agent for it.
 func startAgentServer(t *testing.T, reg *Registry) *Agent {
+	return startAgentServerConfig(t, reg, nil)
+}
+
+// startAgentServerConfig is like startAgentServer but applies an optional server
+// modifier (for example WithKeys or WithDiscoveryKey) before wiring the handlers.
+func startAgentServerConfig(t *testing.T, reg *Registry, configure func(*Server) *Server) *Agent {
 	t.Helper()
 	srv := NewServer(reg)
+	if configure != nil {
+		srv = configure(srv)
+	}
 	handlers := srv.Handlers()
 	dnsSrv := dns.NewServer(agentZone, &handlers).WithDiscovery("127.0.0.1.", 53)
 	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})

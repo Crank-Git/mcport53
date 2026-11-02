@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 
+	"github.com/Crank-Git/mcport53/internal/auth"
 	"github.com/Crank-Git/mcport53/internal/codec"
 	"github.com/Crank-Git/mcport53/internal/dns"
 )
@@ -13,9 +14,11 @@ import (
 // schema, call, and result-chunk delivery. It is the glue a dns.Server needs to
 // expose MCP tools over DNS.
 type Server struct {
-	registry *Registry
-	results  *ResultStore
-	verify   func(*dns.CallRequest) error
+	registry     *Registry
+	results      *ResultStore
+	verify       func(*dns.CallRequest) error
+	keys         *auth.KeyRegistry // optional per-tool HMAC keys (protocol §8)
+	discoveryKey []byte            // optional key signing discovery documents (protocol §8)
 }
 
 // NewServer builds a Server for the given registry with a fresh result store.
@@ -25,9 +28,26 @@ func NewServer(registry *Registry) *Server {
 
 // WithVerify sets the optional call-verification hook (protocol §7). A non-nil
 // hook is invoked for every call before it runs; returning an error rejects the
-// call.
+// call. It is ignored when WithKeys has installed per-tool verification.
 func (s *Server) WithVerify(fn func(*dns.CallRequest) error) *Server {
 	s.verify = fn
+	return s
+}
+
+// WithKeys installs per-tool HMAC keys (protocol §8). Calls are verified with
+// the key registered for the called tool, falling back to the registry's default
+// key; unsigned calls and signatures made with the wrong key are rejected, and a
+// replay guard rejects reused nonces.
+func (s *Server) WithKeys(reg *auth.KeyRegistry) *Server {
+	s.keys = reg
+	return s
+}
+
+// WithDiscoveryKey makes the server sign every discovery document with key
+// (protocol §8). Clients holding the same key can verify the document's
+// authenticity, which is what makes delegated discovery trustworthy.
+func (s *Server) WithDiscoveryKey(key []byte) *Server {
+	s.discoveryKey = key
 	return s
 }
 
@@ -39,7 +59,12 @@ func (s *Server) Handlers() dns.Handlers {
 		OnSchema:    s.onSchema,
 		OnChunk:     s.onChunk,
 	}
-	h.OnVerify = s.verify
+	switch {
+	case s.keys != nil:
+		h.OnVerify = HMACVerifyKeys(s.keys)
+	case s.verify != nil:
+		h.OnVerify = s.verify
+	}
 	return h
 }
 
@@ -92,7 +117,9 @@ func (s *Server) onChunk(req *dns.ChunkRequest) *codec.Envelope {
 	return codec.Chunked("", req.Session, req.Chunk, total, more, encoded)
 }
 
-// onDiscovery builds the discovery document (§2.1).
+// onDiscovery builds the discovery document (§2.1), signing it with the
+// discovery key when one is configured so clients can verify its authenticity
+// (protocol §8).
 func (s *Server) onDiscovery() *dns.DiscoveryResponse {
 	doc := &dns.DiscoveryResponse{Version: 1}
 	for _, t := range s.registry.Tools() {
@@ -101,6 +128,11 @@ func (s *Server) onDiscovery() *dns.DiscoveryResponse {
 			Description: t.Description,
 			InputSchema: t.InputSchema,
 		})
+	}
+	if s.discoveryKey != nil {
+		if b, err := json.Marshal(doc); err == nil {
+			doc.Sig = auth.Sign(s.discoveryKey, "discovery", "", b, 0)
+		}
 	}
 	return doc
 }

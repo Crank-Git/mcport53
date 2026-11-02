@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Crank-Git/mcport53/internal/auth"
 	"github.com/Crank-Git/mcport53/internal/codec"
 	"github.com/Crank-Git/mcport53/internal/dns"
 )
@@ -27,6 +28,22 @@ func NewAgent(serverAddr, zone string) *Agent {
 // SetTimeout sets the underlying query timeout.
 func (a *Agent) SetTimeout(d time.Duration) {
 	a.client.SetTimeout(d)
+}
+
+// WithKeys installs per-tool HMAC keys (protocol §8). Every call is signed with
+// the key registered for the called tool (falling back to the registry's default
+// key). The server must be configured with a matching registry (Server.WithKeys).
+func (a *Agent) WithKeys(reg *auth.KeyRegistry) *Agent {
+	a.client.WithSigner(reg.Sign)
+	return a
+}
+
+// WithDiscoveryKey makes Discovery verify signed discovery documents with key
+// (protocol §8). When set, Discovery rejects documents that are unsigned or whose
+// signature does not verify.
+func (a *Agent) WithDiscoveryKey(key []byte) *Agent {
+	a.client.WithDiscoveryKey(key)
+	return a
 }
 
 // Discovery queries the discovery document (§2.1).

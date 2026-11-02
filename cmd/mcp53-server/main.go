@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/Crank-Git/mcport53/internal/auth"
 	"github.com/Crank-Git/mcport53/internal/dns"
 	"github.com/Crank-Git/mcport53/pkg/mcp"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -25,6 +26,8 @@ func main() {
 		zone     = flag.String("zone", "example.", "authoritative base domain (tool zone)")
 		addr     = flag.String("addr", "127.0.0.1:5333", "listen address (host:port)")
 		secret   = flag.String("secret", "", "optional shared secret for HMAC call signatures (protocol §7)")
+		key      = flag.String("key", "", "default HMAC key for per-tool call signatures and signed discovery (protocol §8)")
+		keys     = flag.String("keys", "", "optional per-tool key overrides as tool=key,tool=key (protocol §8)")
 		discover = flag.String("discover", "127.0.0.1:53", "SRV target advertised in discovery (host:port)")
 	)
 	flag.Parse()
@@ -36,7 +39,19 @@ func main() {
 
 	registry := registerDefaultTools()
 	server := mcp.NewServer(registry)
-	if *secret != "" {
+	switch {
+	case *key != "":
+		perTool, err := parseKeys(*keys)
+		if err != nil {
+			log.Fatalf("mcp53-server: %v", err)
+		}
+		reg := auth.NewKeyRegistry([]byte(*key))
+		for tool, secret := range perTool {
+			reg.Add(tool, []byte(secret))
+		}
+		server.WithKeys(reg)
+		server.WithDiscoveryKey([]byte(*key))
+	case *secret != "":
 		server.WithVerify(mcp.HMACVerify([]byte(*secret), 0, 0))
 	}
 
@@ -123,6 +138,29 @@ func textResult(text string) *sdkmcp.CallToolResult {
 	return &sdkmcp.CallToolResult{
 		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: text}},
 	}
+}
+
+// parseKeys parses a "tool=key,tool=key" string into a map of tool name to
+// per-tool secret (protocol §8). An empty string yields a nil map; a malformed
+// entry (missing '=') returns an error so a bad --keys value is caught at startup.
+func parseKeys(s string) (map[string]string, error) {
+	out := map[string]string{}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	for _, pair := range strings.Split(s, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		tool, secret, ok := strings.Cut(pair, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid --keys entry %q: want tool=key", pair)
+		}
+		out[strings.ToLower(strings.TrimSpace(tool))] = secret
+	}
+	return out, nil
 }
 
 // parseDiscover parses a "host:port" string into the SRV target host and port
