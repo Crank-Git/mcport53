@@ -18,11 +18,14 @@ reach tools in places where HTTP, websockets, or raw TCP cannot.
 ## Quick start
 
 ```bash
-# Run the reference server (exposes example tools over DNS)
-go run ./cmd/mcp53-server --zone example --port 5353
+# Run the reference server (exposes example tools over DNS on 127.0.0.1:5333)
+go run ./cmd/mcp53-server --zone example.
 
-# Query it (client)
-go run ./cmd/mcp53-client --server dns.example --tool echo --args '{"text":"hi"}'
+# List the tools it serves
+go run ./cmd/mcp53-client --server 127.0.0.1:5333 --zone example.
+
+# Call a tool and print the result
+go run ./cmd/mcp53-client --server 127.0.0.1:5333 --zone example. --tool echo --args '{"text":"hi"}'
 ```
 
 See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the full protocol and

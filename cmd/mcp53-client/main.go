@@ -36,9 +36,14 @@ func main() {
 		return
 	}
 
-	var argBytes []byte
-	if err := json.Unmarshal([]byte(*args), &argBytes); err != nil {
-		log.Fatalf("mcp53-client: parsing --args: %v", err)
+	// --args is the raw JSON passed straight to the tool; validate it so a
+	// typo surfaces here rather than as an opaque tool error.
+	if !json.Valid([]byte(*args)) {
+		log.Fatalf("mcp53-client: --args must be valid JSON: %s", *args)
+	}
+	argBytes, err := parseArgs(*args)
+	if err != nil {
+		log.Fatalf("mcp53-client: %v", err)
 	}
 
 	re, err := agent.Call(context.Background(), *tool, argBytes)
@@ -89,4 +94,13 @@ func renderResult(re *codec.ResultEnvelope) (string, error) {
 	default:
 		return re.Value, nil
 	}
+}
+
+// parseArgs validates the --args flag and returns the raw JSON bytes to send to
+// the tool. The bytes are passed straight through, so they must be valid JSON.
+func parseArgs(s string) ([]byte, error) {
+	if !json.Valid([]byte(s)) {
+		return nil, fmt.Errorf("--args must be valid JSON: %s", s)
+	}
+	return []byte(s), nil
 }
