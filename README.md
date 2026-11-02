@@ -8,12 +8,12 @@ MCPort53 turns MCP tool calls into DNS queries and results into DNS responses.
 Because outbound DNS (UDP/TCP **port 53**) is almost always permitted, you can
 reach tools in places where HTTP, websockets, or raw TCP cannot.
 
-- 📖 **Protocol spec:** [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
-- 🧩 **Encoding:** DNS-safe base32 labels, chunked to DNS limits
-- 🔍 **Discovery:** SRV + TXT listing tools and schemas
-- ⚡ **Calls:** `<args>.<tool>.call.<zone>` → TXT result
-- 📦 **Large/long results:** chunked sessions + job polling
-- 🔒 **Auth:** optional HMAC signature + nonce (replay protection)
+- **Protocol spec:** [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
+- **Encoding:** DNS-safe base32 labels, chunked to DNS limits
+- **Discovery:** SRV + TXT listing tools and schemas
+- **Calls:** `<args>.<tool>.call.<zone>` -> TXT result
+- **Large/long results:** chunked sessions + job polling
+- **Auth:** optional HMAC signature + nonce (replay protection)
 
 ## Quick start
 
