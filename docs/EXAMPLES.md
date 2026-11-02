@@ -21,7 +21,12 @@ mcp53-server: listening on 127.0.0.1:5333 for zone example. (3 tools)
 
 Flags: `--zone` (authoritative base domain, default `example.`),
 `--addr` (listen address, default `127.0.0.1:5333`),
-`--secret` (optional HMAC shared secret, see [Signing calls](#6-signing-calls)).
+`--secret` (optional HMAC shared secret, see [Signing calls](#6-signing-calls)),
+`--discover` (SRV target advertised in discovery, default `127.0.0.1:53`).
+
+`--discover` controls what the `_mcp._udp` SRV record points clients at (protocol
+§2.1). Leave it at the default for local runs; in a real deployment point it at
+the reachable resolver, e.g. `--discover dns.example.com:53`.
 
 ## 2. List the tools it serves
 
@@ -111,8 +116,15 @@ Calls made without the matching secret are rejected by the server. See
 ## 7. Pointing at a real resolver
 
 The examples above talk to the server directly on `127.0.0.1:5333`. In a real
-deployment you run the server on a host reachable over DNS and point a resolver
-(or the client's `--server`) at it:
+deployment you run the server behind a public resolver and point that resolver
+(or the client's `--server`) at the authoritative zone. Advertise the resolver
+from the server so discovery points clients at the right address:
+
+```bash
+go run ./cmd/mcp53-server --zone example. --discover dns.example.com:53
+```
+
+Then query through the resolver:
 
 ```bash
 go run ./cmd/mcp53-client --server 198.51.100.53 --zone example. \
