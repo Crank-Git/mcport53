@@ -69,8 +69,11 @@ func (a *Agent) Call(ctx context.Context, tool string, args []byte) (*codec.Resu
 	}
 	switch env.Status {
 	case codec.StatusOK:
-		return codec.ParseResultEnvelope(env.Result)
+		return codec.ParseResultEnvelopeFrom(env)
 	case codec.StatusChunked:
+		if env.Cursor != "" {
+			return a.assembleByCursor(env)
+		}
 		return a.assembleChunks(env)
 	case codec.StatusError:
 		return nil, fmt.Errorf("mcp: tool %s: %s", tool, env.Error)
@@ -109,6 +112,38 @@ func (a *Agent) assembleChunks(first *codec.Envelope) (*codec.ResultEnvelope, er
 			return nil, fmt.Errorf("mcp: decoding chunk %d: %w", i, err)
 		}
 		raw = append(raw, b...)
+	}
+	return codec.ParseResultEnvelope(string(raw))
+}
+
+// assembleByCursor concatenates the chunks of a cursor-paginated result and
+// parses the assembled result envelope (protocol §4.4). It follows the opaque
+// cursor the server hands out with each chunk instead of requesting fixed
+// indices. Chunk 0 is already in first.
+func (a *Agent) assembleByCursor(first *codec.Envelope) (*codec.ResultEnvelope, error) {
+	var raw []byte
+	session := first.Session
+	cursor := first.Cursor
+	for {
+		if first.Result != "" {
+			b, err := base64.StdEncoding.DecodeString(first.Result)
+			if err != nil {
+				return nil, fmt.Errorf("mcp: decoding chunk: %w", err)
+			}
+			raw = append(raw, b...)
+		}
+		if !first.More || cursor == "" {
+			break
+		}
+		next, err := a.client.ChunkByCursor(a.zone, session, cursor)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: fetching next chunk: %w", err)
+		}
+		if next.Status != codec.StatusChunked {
+			return nil, fmt.Errorf("mcp: chunk returned status %q", next.Status)
+		}
+		first = next
+		cursor = next.Cursor
 	}
 	return codec.ParseResultEnvelope(string(raw))
 }

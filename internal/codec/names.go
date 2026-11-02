@@ -135,6 +135,36 @@ func ParseChunkName(labels []string) (chunk int, session string, zone []string, 
 	return chunk, session, zone, nil
 }
 
+// CursorName builds the label slice for a cursor-paginated result-chunk query
+// (protocol §4.4):
+//
+//	<cursor>.<session>.chunk.<zone>
+//
+// The cursor replaces the numeric chunk index: it is an opaque token the server
+// assigns and the client returns unchanged.
+func CursorName(zone []string, session, cursor string) []string {
+	return append([]string{
+		cursor,
+		session,
+		LabelChunk,
+	}, zone...)
+}
+
+// ParseCursorName parses a cursor-paginated result-chunk query name.
+func ParseCursorName(labels []string) (cursor, session string, zone []string, err error) {
+	i := indexOf(labels, LabelChunk)
+	if i < 2 {
+		return "", "", nil, fmt.Errorf("codec: malformed cursor chunk name %v", labels)
+	}
+	cursor = labels[i-2]
+	session = labels[i-1]
+	zone = labels[i+1:]
+	if cursor == "" || session == "" || len(zone) == 0 {
+		return "", "", nil, fmt.Errorf("codec: malformed cursor chunk name %v", labels)
+	}
+	return cursor, session, zone, nil
+}
+
 // JobName builds the label slice for a job-status poll:
 //
 //	<job>.job.<zone>

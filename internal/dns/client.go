@@ -161,9 +161,19 @@ func (c *Client) Call(zone, tool string, args []byte, sig string) (*codec.Envelo
 	return c.queryEnvelope(LabelsToName(labels), dns.TypeTXT)
 }
 
-// Chunk fetches one result chunk by session (protocol §2.4).
+// Chunk fetches one result chunk by session using a fixed chunk index
+// (protocol §2.4).
 func (c *Client) Chunk(zone, session string, idx int) (*codec.Envelope, error) {
 	labels := codec.ChunkName(zoneLabels(zone), session, idx)
+	return c.queryEnvelope(LabelsToName(labels), dns.TypeTXT)
+}
+
+// ChunkByCursor fetches the next result chunk by session using an opaque
+// pagination cursor assigned by the server (protocol §4.4). The cursor replaces
+// the fixed chunk index; the client follows it until the response reports no
+// more chunks.
+func (c *Client) ChunkByCursor(zone, session, cursor string) (*codec.Envelope, error) {
+	labels := codec.CursorName(zoneLabels(zone), session, cursor)
 	return c.queryEnvelope(LabelsToName(labels), dns.TypeTXT)
 }
 

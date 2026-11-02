@@ -30,6 +30,7 @@ const (
 	KindJSON   Kind = "json"   // structured result (JSON object)
 	KindText   Kind = "text"   // text result (base64 in JSON)
 	KindBase64 Kind = "base64" // binary result (base64 in JSON)
+	KindGzip   Kind = "gzip"   // result value is gzip-compressed then base64-encoded
 )
 
 // Envelope is the JSON structure returned in a TXT record for a call, chunk, or
@@ -46,6 +47,13 @@ type Envelope struct {
 	More    bool   `json:"more,omitempty"`
 	Job     string `json:"job,omitempty"`
 	Ms      int    `json:"ms,omitempty"`
+	// Compression is an optional result marker (protocol §4.4). When non-empty
+	// (for example "gzip") the result payload was compressed with that algorithm
+	// and base64-encoded before being placed in the envelope.
+	Compression string `json:"compression,omitempty"`
+	// Cursor is an opaque pagination token for chunked results that use cursor
+	// pagination instead of fixed chunk indices (protocol §4.4).
+	Cursor string `json:"cursor,omitempty"`
 }
 
 // NewEnvelope builds an envelope with the current protocol version.
@@ -171,4 +179,23 @@ func ParseResultEnvelope(s string) (*ResultEnvelope, error) {
 		return nil, fmt.Errorf("codec: parsing result envelope: %w", err)
 	}
 	return &re, nil
+}
+
+// ParseResultEnvelopeFrom decodes the result payload carried by env, transparently
+// decompressing it first when the envelope marks a compression algorithm
+// (protocol §4.4). For an uncompressed envelope it is equivalent to
+// ParseResultEnvelope on env.Result.
+func ParseResultEnvelopeFrom(env *Envelope) (*ResultEnvelope, error) {
+	if env == nil {
+		return nil, fmt.Errorf("codec: nil envelope")
+	}
+	raw := []byte(env.Result)
+	if env.Compression != "" {
+		var err error
+		raw, err = DecompressResult(CompressionKind(env.Compression), env.Result)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return ParseResultEnvelope(string(raw))
 }

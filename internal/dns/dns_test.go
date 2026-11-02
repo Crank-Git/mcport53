@@ -314,6 +314,43 @@ func TestChunkProtocol(t *testing.T) {
 	}
 }
 
+func TestChunkCursorProtocol(t *testing.T) {
+	c := startTestServer(t, &Handlers{
+		OnCall: func(req *CallRequest) *codec.Envelope {
+			e := codec.Chunked("big", "sess-c", 0, 2, true, b64("hello-"))
+			e.Cursor = "done"
+			return e
+		},
+		OnChunk: func(req *ChunkRequest) *codec.Envelope {
+			if req.Cursor == "" {
+				t.Fatalf("cursor fetch missing its cursor")
+			}
+			if req.Chunk != 0 {
+				t.Fatalf("cursor fetch should not carry a fixed index, got %d", req.Chunk)
+			}
+			return codec.Chunked("big", "sess-c", 1, 2, false, b64("world"))
+		},
+	})
+	e, err := c.Call(testZone, "big", nil, "")
+	if err != nil {
+		t.Fatalf("call big: %v", err)
+	}
+	if e.Cursor == "" {
+		t.Fatal("chunk-0 envelope should carry a cursor")
+	}
+	last, err := c.ChunkByCursor(testZone, e.Session, e.Cursor)
+	if err != nil {
+		t.Fatalf("chunk by cursor: %v", err)
+	}
+	if last.More {
+		t.Fatalf("final cursor chunk still has more=true: %+v", last)
+	}
+	// A malformed cursor name is rejected by the name parser.
+	if _, _, _, err := codec.ParseCursorName([]string{"chunk", "example"}); err == nil {
+		t.Fatal("expected an error for a malformed cursor chunk name")
+	}
+}
+
 func TestJobProtocol(t *testing.T) {
 	c, _ := newTestServer(t)
 	e, err := c.Call(testZone, "slow", nil, "")

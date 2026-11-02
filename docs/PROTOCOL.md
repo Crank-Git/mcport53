@@ -149,9 +149,14 @@ Results are returned in a **TXT** record. The TXT carries a single JSON **envelo
   "status": "ok",
   "tool": "tool_name",
   "result": "{ ... serialized tool result ... }",
+  "cursor": "<opaque pagination token>",
+  "compression": "gzip",
   "ms": 12
 }
 ```
+
+`cursor` is present only for `chunked` results served with cursor pagination
+(§4.4). `compression` is present only when `result` is compressed (§4.4).
 
 ### 4.1 Statuses
 
@@ -190,6 +195,50 @@ but resolvers inconsistently handle multi-string/multi-record TXT. To stay safe:
 ```
 
 On `done`, fetch the result by the session-chunk protocol (§4.2) using `session`.
+
+### 4.4 Compression & cursor pagination
+
+Two optional refinements, both independent of the base protocol.
+
+#### Compression
+
+When a result is large, the `result` field may be a gzip-compressed, base64-
+encoded blob instead of the plain serialized tool result:
+
+```json
+{"v":1,"status":"ok","tool":"big","result":"<base64 of gzip(payload)>",
+ "compression":"gzip"}
+```
+
+The `compression` marker (`gzip` is the only value in this implementation; `zstd`
+is reserved for a future standard-library-free build) tells the client to
+decompress `result` before parsing it. Compression wraps the *inner* serialized
+tool result, so the `kind`/`mime`/`value` structure inside is preserved. The
+server applies it automatically when it would otherwise exceed the TXT size limit.
+
+#### Cursor pagination
+
+Fixed chunk indices (`chunk`/`total`) are the default. When the server enables
+cursor pagination it tags the first `chunked` envelope with an opaque `cursor`
+token:
+
+```json
+{"v":1,"status":"chunked","session":"s1","chunk":0,"total":3,"more":true,
+ "chunk":"<base64>","cursor":"<opaque token>"}
+```
+
+The client then fetches subsequent chunks by presenting that cursor instead of
+requesting a fixed index:
+
+```
+<cursor>.<session>.chunk.<zone>  ->  chunk N bytes + next cursor
+```
+
+Each response carries the next `cursor` (or omits it on the final chunk). The
+token is unguessable and session-bound, so a cursor cannot be replayed against a
+different session. If `cursor` is absent the client falls back to fixed-index
+fetching (§4.2). The two modes are mutually exclusive per result; the server
+chooses one.
 
 ---
 
