@@ -192,6 +192,50 @@ func TestDiscovery(t *testing.T) {
 	}
 }
 
+// TestDiscoverySRVTarget verifies the advertised SRV target and port flow through
+// to the discovery response (protocol §2.1), so operators can point clients at
+// the reachable resolver rather than a hard-wired address.
+func TestDiscoverySRVTarget(t *testing.T) {
+	handlers := &Handlers{
+		OnDiscovery: func() *DiscoveryResponse { return &DiscoveryResponse{} },
+	}
+	srv := NewServer(testZone, handlers).WithDiscovery("resolver.example.", 8053)
+
+	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("bind udp: %v", err)
+	}
+	dnsSrv := &dns.Server{PacketConn: udpConn, Handler: srv.Handler()}
+	done := make(chan struct{})
+	go func() {
+		_ = dnsSrv.ActivateAndServe()
+		close(done)
+	}()
+	t.Cleanup(func() {
+		_ = dnsSrv.Shutdown()
+		<-done
+	})
+
+	c := NewClient(udpConn.LocalAddr().String())
+	resp, err := c.Query(dns.Fqdn("_mcp._udp."+strings.TrimSuffix(testZone, ".")), dns.TypeSRV)
+	if err != nil {
+		t.Fatalf("discovery query: %v", err)
+	}
+	var srvRec *dns.SRV
+	for _, rr := range resp.Answer {
+		if s, ok := rr.(*dns.SRV); ok {
+			srvRec = s
+			break
+		}
+	}
+	if srvRec == nil {
+		t.Fatal("no SRV answer in discovery response")
+	}
+	if srvRec.Target != "resolver.example." || srvRec.Port != 8053 {
+		t.Errorf("SRV = %q:%d, want resolver.example.:8053", srvRec.Target, srvRec.Port)
+	}
+}
+
 func TestCallOK(t *testing.T) {
 	c, _ := newTestServer(t)
 	e, err := c.Call(testZone, "echo", []byte(`{"text":"hi"}`), "")

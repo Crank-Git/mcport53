@@ -37,6 +37,43 @@ func TestRegisterDefaultTools(t *testing.T) {
 
 // TestDefaultToolHandlers exercises each built-in tool handler through the
 // registry, covering both the success and invalid-argument paths.
+// TestParseDiscover checks the --discover host:port parsing used for the
+// discovery SRV record (protocol §2.1), covering success and every error path.
+func TestParseDiscover(t *testing.T) {
+	tests := []struct {
+		name     string
+		in       string
+		wantHost string
+		wantPort uint16
+		wantErr  bool
+	}{
+		{"default", "127.0.0.1:53", "127.0.0.1", 53, false},
+		{"public host", "dns.example.com:53", "dns.example.com", 53, false},
+		{"custom port", "resolver.example:8053", "resolver.example", 8053, false},
+		{"missing port", "127.0.0.1", "", 0, true},
+		{"non-numeric port", "127.0.0.1:abc", "", 0, true},
+		{"port out of range", "127.0.0.1:70000", "", 0, true},
+		{"empty", "", "", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			host, port, err := parseDiscover(tt.in)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseDiscover(%q) expected error, got host=%q port=%d", tt.in, host, port)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseDiscover(%q) unexpected error: %v", tt.in, err)
+			}
+			if host != tt.wantHost || port != tt.wantPort {
+				t.Errorf("parseDiscover(%q) = (%q, %d), want (%q, %d)", tt.in, host, port, tt.wantHost, tt.wantPort)
+			}
+		})
+	}
+}
+
 func TestDefaultToolHandlers(t *testing.T) {
 	reg := registerDefaultTools()
 	call := func(name string, args string) (*codec.Envelope, error) {

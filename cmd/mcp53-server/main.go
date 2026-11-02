@@ -8,8 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -20,11 +22,17 @@ import (
 
 func main() {
 	var (
-		zone   = flag.String("zone", "example.", "authoritative base domain (tool zone)")
-		addr   = flag.String("addr", "127.0.0.1:5333", "listen address (host:port)")
-		secret = flag.String("secret", "", "optional shared secret for HMAC call signatures (protocol §7)")
+		zone     = flag.String("zone", "example.", "authoritative base domain (tool zone)")
+		addr     = flag.String("addr", "127.0.0.1:5333", "listen address (host:port)")
+		secret   = flag.String("secret", "", "optional shared secret for HMAC call signatures (protocol §7)")
+		discover = flag.String("discover", "127.0.0.1:53", "SRV target advertised in discovery (host:port)")
 	)
 	flag.Parse()
+
+	discoverHost, discoverPort, err := parseDiscover(*discover)
+	if err != nil {
+		log.Fatalf("mcp53-server: %v", err)
+	}
 
 	registry := registerDefaultTools()
 	server := mcp.NewServer(registry)
@@ -34,7 +42,7 @@ func main() {
 
 	handlers := server.Handlers()
 	dnsSrv := dns.NewServer(*zone, &handlers)
-	dnsSrv = dnsSrv.WithDiscovery("127.0.0.1.", 53)
+	dnsSrv = dnsSrv.WithDiscovery(discoverHost, discoverPort)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -115,4 +123,19 @@ func textResult(text string) *sdkmcp.CallToolResult {
 	return &sdkmcp.CallToolResult{
 		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: text}},
 	}
+}
+
+// parseDiscover parses a "host:port" string into the SRV target host and port
+// advertised in discovery (protocol §2.1). It errors on a malformed host:port or
+// an out-of-range port so a bad --discover fails fast instead of at query time.
+func parseDiscover(s string) (string, uint16, error) {
+	host, portStr, err := net.SplitHostPort(s)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid --discover %q: %w", s, err)
+	}
+	port, err := strconv.ParseUint(portStr, 10, 16)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid --discover port %q: %w", portStr, err)
+	}
+	return host, uint16(port), nil
 }
