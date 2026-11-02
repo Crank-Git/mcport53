@@ -46,6 +46,15 @@ func (a *Agent) WithDiscoveryKey(key []byte) *Agent {
 	return a
 }
 
+// WithDoH configures the agent to reach its server over DNS-over-HTTPS (RFC 8484)
+// via endpoint (protocol §12). Every query is sent to the DoH endpoint instead of
+// the direct server address, which is how an agent reaches the authoritative
+// server through a normal resolver.
+func (a *Agent) WithDoH(endpoint string) *Agent {
+	a.client.WithDoH(endpoint)
+	return a
+}
+
 // Discovery queries the discovery document (§2.1).
 func (a *Agent) Discovery() (*dns.DiscoveryResponse, error) {
 	return a.client.Discovery(a.zone)
