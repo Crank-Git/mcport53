@@ -219,7 +219,7 @@ unchanged.
 | `queued` | call accepted, not yet running; `job` holds a job id           | poll `<job>.job.<zone>`                |
 | `running`| job in progress                                              | poll again (with fresh nonce)          |
 | `chunked`| result is large; `session`+`chunk`+`total`+`more` describe it  | fetch chunks until `more=false`        |
-| `done`   | long-running job finished; `session` holds the assembled result| fetch the session result               |
+| `done`   | long-running job finished; `session`+`total` locate the result | fetch chunks `0..total-1` of `session` |
 
 ### 4.2 TXT size limit & chunking
 
@@ -243,19 +243,32 @@ bytes** of payload:
   5 minutes) and within bounded memory, dropping the oldest first. A chunk query
   for an expired or dropped session returns an `error` envelope; the client
   repeats the call.
-- If the tool is **long-running**, return `queued` with a `job` id. The server
-  runs the tool in the background and stores the outcome under a `session`. The
-  client polls `<job>.job.<zone>` until it gets `done` (with a `session`), then
-  fetches the assembled result as above.
+- If the tool is still running after the server's **inline budget** (default
+  750 ms), return `queued` with a `job` id and keep running the tool in the
+  background (§4.3).
 
 ### 4.3 Job polling
 
+A call that is still running after the server's inline budget (default 750 ms) is
+answered `queued` with a job id; the tool keeps running, bounded by the server's
+call timeout. The budget stays well under the upstream timeout of common
+resolvers (about a second), so a slow tool never makes a resolver give up on the
+call query. A client's per-query timeout must exceed the inline budget.
+
+The client polls with a fresh nonce each time, so no resolver answers a poll from
+cache:
+
 ```
-<job>.job.<zone>  ->  TXT  {"v":1,"status":"running","job":"j1"}
-<job>.job.<zone>  ->  TXT  {"v":1,"status":"done","job":"j1","session":"s1"}
+<nonce>.<job>.job.<zone>  ->  {"v":1,"status":"running","tool":"t","job":"j1"}
+<nonce>.<job>.job.<zone>  ->  {"v":1,"status":"done","tool":"t","job":"j1","session":"s1","total":3,"compression":"gzip"}
+<nonce>.<job>.job.<zone>  ->  {"v":1,"status":"error","tool":"t","job":"j1","error":"..."}
 ```
 
-On `done`, fetch the result by the session-chunk protocol (§4.2) using `session`.
+On `done`, the result is stored under `session`: the client fetches chunks
+`0..total-1` by fixed index (§4.2), concatenates them, and decompresses when
+`compression` is present. A finished job is kept for 5 minutes; polling an
+unknown or expired job returns `error`. The reference client polls with backoff
+from 100 ms up to 1 s.
 
 ### 4.4 Compression & cursor pagination
 

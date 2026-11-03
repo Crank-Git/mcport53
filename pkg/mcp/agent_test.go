@@ -431,10 +431,11 @@ func TestAgentCallStatusError(t *testing.T) {
 	}
 }
 
-// A call that returns an unexpected status (queued/running/done) is an error.
+// A call answered with a status only valid for job polls (running) is an
+// error. ("queued" starts job polling; see jobs_test.go.)
 func TestAgentCallUnexpectedStatus(t *testing.T) {
 	agent := startChunkServer(t,
-		func(*dns.CallRequest) *codec.Envelope { return codec.Queued("echo", "job-1") },
+		func(*dns.CallRequest) *codec.Envelope { return codec.Running("echo", "job-1") },
 		func(*dns.ChunkRequest) *codec.Envelope { return codec.Chunked("echo", "sess", 0, 1, false, "") },
 	)
 	if _, err := agent.Call(context.Background(), "echo", []byte(`{}`)); err == nil {

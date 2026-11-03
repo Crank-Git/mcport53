@@ -317,7 +317,16 @@ func JobName(zone []string, job string) []string {
 	return append([]string{job, LabelJob}, zone...)
 }
 
-// ParseJobName parses a job-status poll name.
+// JobPollName builds a job poll with a fresh nonce, so a resolver never
+// answers it from cache (protocol §4.3):
+//
+//	<nonce>.<job>.job.<zone>
+func JobPollName(zone []string, job, nonce string) []string {
+	return append([]string{nonce, job, LabelJob}, zone...)
+}
+
+// ParseJobName parses a job-status poll name. A nonce label before the job
+// id, as JobPollName adds, is ignored.
 func ParseJobName(labels []string) (job string, zone []string, err error) {
 	i := indexOf(labels, LabelJob)
 	if i < 1 {
