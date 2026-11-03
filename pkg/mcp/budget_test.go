@@ -118,7 +118,10 @@ func TestEveryResponseFits1232(t *testing.T) {
 			return codec.OK(longTool, base64.StdEncoding.EncodeToString(buf), 999999), nil
 		}
 	}})
-	srv := NewServer(r).WithCompression().WithCursorPagination()
+	// Building the multi-megabyte fixture can take longer than the inline
+	// budget on a slow machine, which would answer "queued" instead of the
+	// chunk-0 envelope this test measures.
+	srv := NewServer(r).WithCompression().WithCursorPagination().WithInlineBudget(time.Minute)
 	addr := budgetServer(t, srv, longZone, secret)
 
 	callName := func(args string) string {
