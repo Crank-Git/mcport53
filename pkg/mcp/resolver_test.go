@@ -76,17 +76,28 @@ func jsonText(t *testing.T, re *codec.ResultEnvelope) string {
 }
 
 // TestThroughResolver runs every feature that should work through a
-// recursive resolver against a real Unbound.
+// recursive resolver against a real Unbound, with and without DNS 0x20 case
+// randomisation (use-caps-for-id).
 func TestThroughResolver(t *testing.T) {
+	for _, caps := range []bool{false, true} {
+		name := "plain"
+		if caps {
+			name = "0x20"
+		}
+		t.Run(name, func(t *testing.T) { throughResolver(t, testresolver.Options{CapsForID: caps}) })
+	}
+}
+
+func throughResolver(t *testing.T, opt testresolver.Options) {
 	t.Run("discovery", func(t *testing.T) {
-		a := viaResolver(t, NewServer(resolverRegistry(t)), testresolver.Options{})
+		a := viaResolver(t, NewServer(resolverRegistry(t)), opt)
 		doc, err := a.Discovery()
 		if err != nil || len(doc.Tools) != 2 {
 			t.Fatalf("discovery: %+v %v", doc, err)
 		}
 	})
 	t.Run("call", func(t *testing.T) {
-		a := viaResolver(t, NewServer(resolverRegistry(t)), testresolver.Options{})
+		a := viaResolver(t, NewServer(resolverRegistry(t)), opt)
 		re, err := a.Call(context.Background(), "echo", []byte(`{}`))
 		if err != nil || !strings.Contains(re.Value, "hi") {
 			t.Fatalf("call: %+v %v", re, err)
@@ -94,7 +105,7 @@ func TestThroughResolver(t *testing.T) {
 	})
 	t.Run("signed call", func(t *testing.T) {
 		keys := auth.NewKeyRegistry([]byte("resolver-key"))
-		a := viaResolver(t, NewServer(resolverRegistry(t)).WithKeys(keys), testresolver.Options{})
+		a := viaResolver(t, NewServer(resolverRegistry(t)).WithKeys(keys), opt)
 		if _, err := a.Call(context.Background(), "echo", []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "not signed") {
 			t.Fatalf("unsigned call: err = %v, want not signed", err)
 		}
@@ -126,7 +137,7 @@ func TestThroughResolver(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			a := viaResolver(t, srv, testresolver.Options{})
+			a := viaResolver(t, srv, opt)
 			got, err := a.Call(context.Background(), "big", []byte(mode.args))
 			if err != nil {
 				t.Fatalf("via resolver: %v", err)

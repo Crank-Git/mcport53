@@ -161,7 +161,10 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	q := r.Question[0]
-	labels := NameToLabels(q.Name)
+	// Parse a lowercased copy: resolvers may randomise the case of the name
+	// (DNS 0x20) and every label the protocol emits is lowercase. The reply
+	// keeps the question as received, so it echoes the resolver's case.
+	labels := NameToLabels(strings.ToLower(q.Name))
 	prefix, ok := s.splitZone(labels)
 	if !ok {
 		// Not authoritative for this name (RFC 1035 §4.1.1).
