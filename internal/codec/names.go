@@ -3,6 +3,8 @@ package codec
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // MaxName is the maximum wire length of a domain name (RFC 1035 §2.3.4).
@@ -19,7 +21,13 @@ const (
 	LabelSchema = "schema"
 	LabelChunk  = "chunk"
 	LabelJob    = "job"
+	LabelUpload = "upload" // one part of an uploaded argument blob
 )
+
+// uploadRefPrefix starts the label that makes a call take its arguments from
+// an upload: "u-<id>-<parts>". '-' is outside the base32 alphabet, so the label
+// can never be inline argument data.
+const uploadRefPrefix = "u-"
 
 // CallName is a parsed MCPort53 tool-call query name.
 type CallName struct {
@@ -28,6 +36,10 @@ type CallName struct {
 	Nonce string   // uncacheability nonce
 	Sig   string   // HMAC signature label ("" if unsigned)
 	Zone  []string // zone labels (rightmost, e.g. ["example"])
+	// Upload and Parts are set when the arguments were uploaded in parts
+	// (protocol §3.1); Args is then empty until the server assembles them.
+	Upload string
+	Parts  int
 }
 
 // BuildCallName constructs the label slice for a call query.
@@ -145,6 +157,14 @@ func ParseCallName(labels []string) (CallName, error) {
 		argsLabels = argsLabels[1:]
 	}
 
+	if len(argsLabels) == 1 && strings.HasPrefix(argsLabels[0], uploadRefPrefix) {
+		id, parts, err := parseUploadRef(argsLabels[0])
+		if err != nil {
+			return cn, err
+		}
+		cn.Upload, cn.Parts = id, parts
+		return cn, nil
+	}
 	if len(argsLabels) > 0 {
 		decoded, err := DecodeBase32(UnchunkLabels(argsLabels))
 		if err != nil {
@@ -153,6 +173,82 @@ func ParseCallName(labels []string) (CallName, error) {
 		cn.Args = decoded
 	}
 	return cn, nil
+}
+
+// UploadRef returns the call-name label that references an upload of parts
+// parts: "u-<id>-<parts>".
+func UploadRef(id string, parts int) string {
+	return uploadRefPrefix + id + "-" + strconv.Itoa(parts)
+}
+
+func parseUploadRef(label string) (id string, parts int, err error) {
+	rest := strings.TrimPrefix(label, uploadRefPrefix)
+	i := strings.LastIndexByte(rest, '-')
+	if i <= 0 {
+		return "", 0, fmt.Errorf("codec: malformed upload reference %q", label)
+	}
+	id = rest[:i]
+	if parts, err = parseIndex(rest[i+1:]); err != nil || parts < 1 {
+		return "", 0, fmt.Errorf("codec: malformed upload reference %q", label)
+	}
+	return id, parts, nil
+}
+
+// BuildUploadCallName builds a call name whose arguments come from an upload
+// (protocol §3.1). It is BuildCallName with the upload reference label in place
+// of the argument labels.
+func BuildUploadCallName(zone []string, tool, upload string, parts int, nonce, sig string) []string {
+	labels := BuildCallName(zone, tool, nil, nonce, sig)
+	i := 0
+	if sig != "" {
+		i = 1
+	}
+	return append(labels[:i:i], append([]string{UploadRef(upload, parts)}, labels[i:]...)...)
+}
+
+// UploadPartName builds the name for one upload part (protocol §3.1):
+//
+//	<data-labels...>.<index>.<upload-id>.upload.<zone>
+func UploadPartName(zone []string, upload string, index int, data []byte) []string {
+	labels := ChunkLabels(EncodeBase32(data))
+	labels = append(labels, strconv.Itoa(index), upload, LabelUpload)
+	return append(labels, zone...)
+}
+
+// ParseUploadPart parses the labels of an upload part name with the zone
+// already removed. It reads from the right ("upload" is last), so data labels
+// that happen to spell a structural label do not confuse it.
+func ParseUploadPart(prefix []string) (upload string, index int, data []byte, err error) {
+	n := len(prefix)
+	if n < 3 || prefix[n-1] != LabelUpload {
+		return "", 0, nil, fmt.Errorf("codec: malformed upload part name %v", prefix)
+	}
+	upload = prefix[n-2]
+	if upload == "" {
+		return "", 0, nil, fmt.Errorf("codec: empty upload id")
+	}
+	if index, err = parseIndex(prefix[n-3]); err != nil {
+		return "", 0, nil, err
+	}
+	if data, err = DecodeBase32(UnchunkLabels(prefix[:n-3])); err != nil {
+		return "", 0, nil, fmt.Errorf("codec: decoding upload part: %w", err)
+	}
+	return upload, index, data, nil
+}
+
+// MaxUploadPart returns the largest part size, in bytes, whose part name fits
+// in MaxName for the given zone and upload id, with a part index of up to
+// indexDigits digits.
+func MaxUploadPart(zone []string, upload string, indexDigits int) int {
+	index := 1
+	for i := 1; i < indexDigits; i++ {
+		index *= 10
+	}
+	n := 0
+	for CheckName(UploadPartName(zone, upload, index, make([]byte, n+1))) == nil {
+		n++
+	}
+	return n
 }
 
 // ChunkName builds the label slice for a result-chunk query:
@@ -254,6 +350,9 @@ func parseIndex(s string) (int, error) {
 			return 0, fmt.Errorf("codec: non-numeric chunk index %q", s)
 		}
 		n = n*10 + int(r-'0')
+		if n > 1<<30 {
+			return 0, fmt.Errorf("codec: chunk index %q out of range", s)
+		}
 	}
 	return n, nil
 }

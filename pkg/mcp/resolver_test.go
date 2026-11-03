@@ -3,7 +3,9 @@ package mcp
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -55,6 +57,11 @@ func resolverRegistry(t *testing.T) *Registry {
 	_, _ = rand.Read(random)
 	big := base64.StdEncoding.EncodeToString(random)
 	r := echoRegistry(t)
+	_ = r.Register(&Tool{Name: "digest", Call: func(_ context.Context, args []byte) (*codec.Envelope, error) {
+		sum := sha256.Sum256(args)
+		re, _ := codec.JSONResult(map[string]string{"text": hex.EncodeToString(sum[:])})
+		return codec.OK("digest", re, 0), nil
+	}})
 	_ = r.Register(&Tool{Name: "big", Call: func(_ context.Context, args []byte) (*codec.Envelope, error) {
 		text := big
 		if string(args) == `"compressible"` {
@@ -92,7 +99,7 @@ func throughResolver(t *testing.T, opt testresolver.Options) {
 	t.Run("discovery", func(t *testing.T) {
 		a := viaResolver(t, NewServer(resolverRegistry(t)), opt)
 		doc, err := a.Discovery()
-		if err != nil || len(doc.Tools) != 2 {
+		if err != nil || len(doc.Tools) != 3 {
 			t.Fatalf("discovery: %+v %v", doc, err)
 		}
 	})
@@ -114,6 +121,32 @@ func throughResolver(t *testing.T, opt testresolver.Options) {
 			t.Fatalf("signed call: %v", err)
 		}
 	})
+	for _, signed := range []bool{false, true} {
+		name := "uploaded args"
+		if signed {
+			name = "uploaded args signed"
+		}
+		t.Run(name, func(t *testing.T) {
+			srv := NewServer(resolverRegistry(t))
+			keys := auth.NewKeyRegistry([]byte("upload-key"))
+			if signed {
+				srv = srv.WithKeys(keys)
+			}
+			a := viaResolver(t, srv, opt)
+			if signed {
+				a.WithKeys(keys)
+			}
+			args, _ := json.Marshal(map[string]string{"doc": strings.Repeat("a long tool argument ", 200)}) // ~4 KB
+			sum := sha256.Sum256(args)
+			re, err := a.Call(context.Background(), "digest", args)
+			if err != nil {
+				t.Fatalf("%d-byte call through the resolver: %v", len(args), err)
+			}
+			if got := jsonText(t, re); got != hex.EncodeToString(sum[:]) {
+				t.Fatalf("server received different arguments: digest %s", got)
+			}
+		})
+	}
 	for _, mode := range []struct {
 		name             string
 		compress, cursor bool

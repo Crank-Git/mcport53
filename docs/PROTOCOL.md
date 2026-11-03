@@ -53,6 +53,8 @@ Reserved structural labels (lowercase, literal):
 | Label    | Meaning                                        |
 |----------|------------------------------------------------|
 | `call`   | marks the end of the args / start of the zone  |
+| `signed` | follows `call` on a signed call (§2.3)         |
+| `upload` | one part of uploaded call arguments (§3.1)     |
 | `schema` | per-tool input-schema lookup                   |
 | `chunk`  | fetch one chunk of a large result              |
 | `job`    | poll the status of a long-running call         |
@@ -112,7 +114,7 @@ recover the argument bytes.
 The whole name must fit the 255-byte DNS limit (RFC 1035 §2.3.4), which bounds the
 argument size: on the zone `example.` a call can carry about 134 bytes of
 arguments unsigned and 108 signed. The client checks the length before sending and
-reports the limit for its zone.
+uploads larger arguments in parts (§3.1).
 
 ### 2.4 Result / chunk / job names
 
@@ -148,6 +150,32 @@ Full call name:
 
 **Encoding alphabet & charset rule:** only `a–z` and `2–7` are emitted, guaranteeing
 DNS-safety and avoiding case/`-`/`_` ambiguity.
+
+### 3.1 Uploading large arguments
+
+Arguments that do not fit in one call name are uploaded in parts first:
+
+```
+<data-labels...>.<index>.<upload-id>.upload.<zone>              # one part  -> TXT ok
+<sig>.u-<upload-id>-<parts>.<tool>.call.signed.<nonce>.<zone>   # the call  (signed)
+u-<upload-id>-<parts>.<tool>.call.<nonce>.<zone>                # the call  (unsigned)
+```
+
+- The client picks a random 26-character upload id, splits the argument bytes into
+  parts that fit a name (about 126 bytes each on `example.`), and sends each part
+  as base32 data labels with its 0-based index. Parts may arrive in any order.
+- A part is idempotent: re-sending the same bytes for an index is accepted, and
+  different bytes for an index already received are rejected.
+- The call replaces its argument labels with one `u-<upload-id>-<parts>` label.
+  `-` is outside the base32 alphabet, so this label can never be inline data. The
+  server assembles parts `0..parts-1`, then verifies the signature over the
+  **assembled** bytes, so a substituted part fails a signed call. The upload is
+  discarded after the call.
+- Uploads expire 5 minutes after their last part and are bounded: 64 KiB per
+  upload, 1024 parts, and 16 MiB across all uploads by default.
+
+The parser reads a part name from the right (`upload` is next to the zone), so
+data labels that happen to spell a structural label are still data.
 
 **Case.** DNS names are case-insensitive, and recursive resolvers may randomise
 the case of the names they forward (DNS 0x20) and require the answer to echo it.

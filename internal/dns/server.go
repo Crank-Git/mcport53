@@ -84,7 +84,8 @@ type Server struct {
 	tsig       *TsigKeys   // optional TSIG keys for transport-layer integrity (protocol §8)
 	tls        *tls.Config // optional TLS config; when set, ListenAndServe serves over DoT (protocol §8)
 
-	calls *callCache // deduplicates retransmitted call queries
+	calls   *callCache   // deduplicates retransmitted call queries
+	uploads *uploadStore // argument parts awaiting their call (protocol §3.1)
 
 	mu      sync.Mutex
 	running []*dns.Server // listeners started by ListenAndServe, for Shutdown
@@ -114,7 +115,14 @@ func NewServer(zone string, h *Handlers) *Server {
 		srvTarget:  "localhost.",
 		srvPort:    53,
 		calls:      newCallCache(0, 0),
+		uploads:    newUploadStore(UploadLimits{}),
 	}
+}
+
+// WithUploadLimits bounds argument uploads (protocol §3.1).
+func (s *Server) WithUploadLimits(l UploadLimits) *Server {
+	s.uploads = newUploadStore(l)
+	return s
 }
 
 // WithCallCache sizes the cache that answers retransmitted copies of a call
@@ -199,6 +207,8 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		s.nodata(r, m)
 	case isSchema(prefix):
 		s.serveSchema(r, m, prefix)
+	case isUpload(prefix):
+		s.serveUpload(r, m, prefix)
 	case isCall(prefix):
 		s.serveCall(r, m, labels, caller)
 	case isChunk(prefix):
@@ -408,6 +418,26 @@ func isDiscovery(prefix []string) bool {
 
 func isSchema(prefix []string) bool {
 	return len(prefix) == 2 && strings.EqualFold(prefix[1], "schema")
+}
+
+// isUpload matches an upload part name: "upload" is the label next to the
+// zone. It is checked before isCall, because base32 data labels may happen to
+// spell "call".
+func isUpload(prefix []string) bool {
+	return len(prefix) > 0 && prefix[len(prefix)-1] == codec.LabelUpload
+}
+
+// serveUpload stores one argument part (protocol §3.1) and acknowledges it.
+func (s *Server) serveUpload(r, m *dns.Msg, prefix []string) {
+	id, index, data, err := codec.ParseUploadPart(prefix)
+	if err == nil {
+		err = s.uploads.put(id, index, data)
+	}
+	if err != nil {
+		s.errResp(r, m, "", err.Error())
+		return
+	}
+	buildTXTResponse(r, m, envelopeTXT(codec.NewEnvelope(codec.StatusOK)))
 }
 
 func isCall(prefix []string) bool {
@@ -638,6 +668,16 @@ func (s *Server) callTXT(labels []string, caller string) string {
 	h := s.handlers
 	if h.OnCall == nil {
 		return envelopeTXT(codec.Error(cn.Tool, "server: no call handler"))
+	}
+	if cn.Upload != "" {
+		// Verification below runs over the assembled bytes, so a tampered or
+		// substituted part fails a signed call.
+		args, err := s.uploads.assemble(cn.Upload, cn.Parts)
+		if err != nil {
+			return envelopeTXT(codec.Error(cn.Tool, err.Error()))
+		}
+		defer s.uploads.remove(cn.Upload)
+		cn.Args = args
 	}
 	req := &CallRequest{Tool: cn.Tool, Args: cn.Args, Nonce: cn.Nonce, Sig: cn.Sig, Zone: s.zone, Caller: caller}
 	if h.OnVerify != nil {

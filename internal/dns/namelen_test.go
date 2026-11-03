@@ -1,7 +1,6 @@
 package dns
 
 import (
-	"errors"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -26,9 +25,9 @@ func argLenServer(t *testing.T, verify func(*CallRequest) error) (*Client, *atom
 	return c, &calls
 }
 
-// TestCallArgBoundaryOverDNS sends the largest call that fits, then one byte
-// more. The first must reach the server intact; the second must fail on the
-// client with ErrNameTooLong and never be sent.
+// TestCallArgBoundaryOverDNS sends the largest call that fits inline, then one
+// byte more (which is uploaded), then more than the upload limit (refused
+// locally).
 func TestCallArgBoundaryOverDNS(t *testing.T) {
 	secret := []byte("k")
 	for _, signed := range []bool{false, true} {
@@ -66,16 +65,23 @@ func TestCallArgBoundaryOverDNS(t *testing.T) {
 			t.Fatalf("signature length changed between sizing (%d) and signing (%d)", len(sig), sigLen)
 		}
 
+		// One byte more no longer fits inline, so the client uploads the
+		// arguments (protocol §3.1): still one call, with every byte intact.
 		before := calls.Load()
-		_, err = c.Call(testZone, "echo", append(args, 'a'), "")
-		if !errors.Is(err, codec.ErrNameTooLong) {
-			t.Fatalf("signed=%v: %d-byte call: err = %v, want ErrNameTooLong", signed, max+1, err)
+		e, err = c.Call(testZone, "echo", append(args, 'a'), "")
+		if err != nil || e.Status != codec.StatusOK || e.Result != strconv.Itoa(max+1) {
+			t.Fatalf("signed=%v: %d-byte call via upload: env=%+v err=%v", signed, max+1, e, err)
 		}
-		if want := "max " + strconv.Itoa(max); !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not report %q", err, want)
+		if calls.Load() != before+1 {
+			t.Errorf("signed=%v: uploaded call ran the handler %d times, want 1", signed, calls.Load()-before)
+		}
+		// Beyond the upload limit the client refuses locally.
+		before = calls.Load()
+		if _, err := c.Call(testZone, "echo", make([]byte, DefaultUploadMaxBytes+1), ""); err == nil || !strings.Contains(err.Error(), "upload limit") {
+			t.Errorf("signed=%v: over-limit call: err = %v", signed, err)
 		}
 		if calls.Load() != before {
-			t.Errorf("signed=%v: an over-long call reached the server", signed)
+			t.Errorf("signed=%v: an over-limit call reached the server", signed)
 		}
 		t.Logf("signed=%v: max argument size on zone %q is %d bytes", signed, testZone, max)
 	}
