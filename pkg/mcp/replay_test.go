@@ -1,11 +1,13 @@
 package mcp
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -141,13 +143,21 @@ func TestHandlersShareOneReplayGuard(t *testing.T) {
 
 // TestReplayEndToEndAcrossAddresses captures a signed query on the wire and
 // replays the identical bytes to the same server from another address family
-// (127.0.0.1 then ::1). The server sees two different callers; the replay must
-// still be refused.
+// (127.0.0.1 then ::1), so the server sees different callers. The call must
+// never run twice: while the call cache holds it, replays get the original
+// answer; once the entry is evicted, replay protection refuses them.
 func TestReplayEndToEndAcrossAddresses(t *testing.T) {
 	key := []byte("e2e-key")
-	srv := NewServer(echoRegistry(t)).WithKeys(auth.NewKeyRegistry(key))
+	var runs atomic.Int64
+	reg := NewRegistry()
+	_ = reg.Register(&Tool{Name: "pay", Call: func(_ context.Context, args []byte) (*codec.Envelope, error) {
+		runs.Add(1)
+		return codec.OK("pay", `{"kind":"text","value":"cGFpZA=="}`, 0), nil
+	}})
+	srv := NewServer(reg).WithKeys(auth.NewKeyRegistry(key))
 	handlers := srv.Handlers()
-	handler := dns.NewServer(agentZone, &handlers).Handler()
+	ds := dns.NewServer(agentZone, &handlers).WithCallCache(1, time.Minute)
+	handler := ds.Handler()
 
 	v4 := listenFor(t, "udp4", "127.0.0.1:0", handler)
 	v6 := listenFor(t, "udp6", "[::1]:0", handler)
@@ -155,14 +165,14 @@ func TestReplayEndToEndAcrossAddresses(t *testing.T) {
 		t.Skip("IPv6 loopback unavailable")
 	}
 
-	nonce, _ := codec.RandomNonce()
-	args := []byte(`{"text":"pay-once"}`)
-	sig := auth.Sign(key, "echo", nonce, args, time.Now().Unix())
-	labels := codec.BuildCallName(dns.NameToLabels(agentZone), "echo", args, nonce, sig)
-	q := new(miedns.Msg)
-	q.SetQuestion(dns.LabelsToName(labels), miedns.TypeTXT)
-
-	send := func(addr string) *codec.Envelope {
+	query := func(args string) *miedns.Msg {
+		nonce, _ := codec.RandomNonce()
+		sig := auth.Sign(key, "pay", nonce, []byte(args), time.Now().Unix())
+		q := new(miedns.Msg)
+		q.SetQuestion(dns.LabelsToName(codec.BuildCallName(dns.NameToLabels(agentZone), "pay", []byte(args), nonce, sig)), miedns.TypeTXT)
+		return q
+	}
+	send := func(q *miedns.Msg, addr string) *codec.Envelope {
 		t.Helper()
 		c := &miedns.Client{Net: "udp", UDPSize: 4096, Timeout: 2 * time.Second}
 		resp, _, err := c.Exchange(q.Copy(), addr)
@@ -185,14 +195,32 @@ func TestReplayEndToEndAcrossAddresses(t *testing.T) {
 		return e
 	}
 
-	if e := send(v4); e.Status != codec.StatusOK {
-		t.Fatalf("original call: %+v", e)
+	captured := query(`{"amount":100}`)
+	first := send(captured, v4)
+	if first.Status != codec.StatusOK {
+		t.Fatalf("original call: %+v", first)
 	}
 	for _, addr := range []string{v4, v6} {
-		e := send(addr)
-		if e.Status != codec.StatusError || !strings.Contains(e.Error, "replay") {
-			t.Errorf("replay via %s: %+v, want replay error", addr, e)
+		if e := send(captured, addr); e.Status != codec.StatusOK || e.Result != first.Result {
+			t.Errorf("cached replay via %s: %+v, want the original answer", addr, e)
 		}
+	}
+	if runs.Load() != 1 {
+		t.Fatalf("tool ran %d times after replays, want 1", runs.Load())
+	}
+
+	// A different call evicts the captured one from the one-entry cache.
+	if e := send(query(`{"amount":1}`), v4); e.Status != codec.StatusOK {
+		t.Fatalf("second call: %+v", e)
+	}
+	for _, addr := range []string{v4, v6} {
+		e := send(captured, addr)
+		if e.Status != codec.StatusError || !strings.Contains(e.Error, "replay") {
+			t.Errorf("uncached replay via %s: %+v, want replay error", addr, e)
+		}
+	}
+	if runs.Load() != 2 {
+		t.Fatalf("tool ran %d times, want 2 (one per distinct call)", runs.Load())
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -648,21 +649,49 @@ func TestCallSignerRoundTrip(t *testing.T) {
 	}
 }
 
+// TestAuthReplayRejected: a replayed copy of a signed call never runs the
+// call again. While the call cache holds the call, the copy gets the original
+// answer; once the entry is gone, replay protection rejects it.
 func TestAuthReplayRejected(t *testing.T) {
 	secret := []byte("shared-top-secret")
-	c := authServer(t, secret)
+	guard := auth.NewReplayGuard(auth.DefaultReplayMaxEntries, time.Minute)
+	t.Cleanup(guard.Close)
+	var runs atomic.Int64
+	srv := NewServer(testZone, &Handlers{
+		OnCall: func(req *CallRequest) *codec.Envelope {
+			runs.Add(1)
+			return codec.OK(req.Tool, "ran", 0)
+		},
+		OnVerify: func(req *CallRequest) error {
+			if err := auth.Check(secret, req.Sig, req.Tool, req.Nonce, req.Args, time.Now(), time.Minute); err != nil {
+				return err
+			}
+			return guard.Check(req.Nonce, time.Now())
+		},
+	}).WithCallCache(1, time.Minute)
+	c, _ := startServerWithAddr(t, srv)
 
-	nonce, _ := codec.RandomNonce()
-	args := []byte(`{"text":"hi"}`)
-	sig := auth.Sign(secret, "echo", nonce, args, time.Now().Unix())
-	name := signedCallName(t, testZone, "echo", args, nonce, sig)
-
+	signed := func(args string) string {
+		nonce, _ := codec.RandomNonce()
+		sig := auth.Sign(secret, "echo", nonce, []byte(args), time.Now().Unix())
+		return signedCallName(t, testZone, "echo", []byte(args), nonce, sig)
+	}
+	name := signed(`{"text":"hi"}`)
 	if e := callEnvelope(t, c, name); e.Status != codec.StatusOK {
 		t.Fatalf("first call status = %q, want ok", e.Status)
 	}
-	// Replay the exact same query (same nonce + signature).
+	if e := callEnvelope(t, c, name); e.Status != codec.StatusOK || runs.Load() != 1 {
+		t.Fatalf("cached replay = %+v after %d runs, want the original answer and 1 run", e, runs.Load())
+	}
+	// Another call evicts the entry from the one-entry cache.
+	if e := callEnvelope(t, c, signed(`{"text":"other"}`)); e.Status != codec.StatusOK {
+		t.Fatalf("second call: %+v", e)
+	}
 	e := callEnvelope(t, c, name)
 	if e.Status != codec.StatusError || !strings.Contains(e.Error, "replay") {
-		t.Fatalf("replayed call envelope = %+v, want error mentioning 'replay'", e)
+		t.Fatalf("uncached replay = %+v, want error mentioning 'replay'", e)
+	}
+	if runs.Load() != 2 {
+		t.Fatalf("handler ran %d times, want 2 (one per distinct call)", runs.Load())
 	}
 }

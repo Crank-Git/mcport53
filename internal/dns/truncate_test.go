@@ -171,8 +171,10 @@ func TestClientRetriesTruncatedOverTCP(t *testing.T) {
 	if err != nil || e.Status != codec.StatusOK || len(e.Result) != 3000 {
 		t.Fatalf("large call: env status=%v len=%d err=%v", e.Status, len(e.Result), err)
 	}
-	if got := calls.Load(); got != 2 {
-		t.Fatalf("large call reached the handler %d times, want 2 (UDP then TCP)", got)
+	// The TCP retry is a copy of the same call, answered from the call cache:
+	// the tool runs once.
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("large call reached the handler %d times, want 1 (TCP retry served from the call cache)", got)
 	}
 
 	var smallCalls atomic.Int64
