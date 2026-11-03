@@ -6,7 +6,7 @@ import (
 )
 
 // KeyRegistry resolves the HMAC key for a tool: a per-tool key when one is
-// registered, otherwise a default key (protocol §8). This lets a server give
+// registered, otherwise a default key (protocol §7.3). This lets a server give
 // each tool its own secret rather than a single shared one, and lets a client
 // sign each call with the matching key. It is safe for concurrent use.
 type KeyRegistry struct {

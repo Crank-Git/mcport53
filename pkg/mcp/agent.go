@@ -31,7 +31,7 @@ func (a *Agent) SetTimeout(d time.Duration) {
 	a.client.SetTimeout(d)
 }
 
-// WithKeys installs per-tool HMAC keys (protocol §8). Every call is signed with
+// WithKeys installs per-tool HMAC keys (protocol §7.3). Every call is signed with
 // the key registered for the called tool (falling back to the registry's default
 // key). The server must be configured with a matching registry (Server.WithKeys).
 func (a *Agent) WithKeys(reg *auth.KeyRegistry) *Agent {
@@ -40,14 +40,14 @@ func (a *Agent) WithKeys(reg *auth.KeyRegistry) *Agent {
 }
 
 // WithDiscoveryKey makes Discovery verify signed discovery documents with key
-// (protocol §8). When set, Discovery rejects documents that are unsigned or whose
+// (protocol §7.3). When set, Discovery rejects documents that are unsigned or whose
 // signature does not verify.
 func (a *Agent) WithDiscoveryKey(key []byte) *Agent {
 	a.client.WithDiscoveryKey(key)
 	return a
 }
 
-// WithTSIG signs every query with a TSIG over the shared secret (protocol §11).
+// WithTSIG signs every query with a TSIG over the shared secret (protocol §8).
 // The server must hold the same secret; responses are verified with it too, so
 // the exchange is authenticated and integrity-checked at the transport layer.
 func (a *Agent) WithTSIG(name string, secret []byte) *Agent {
@@ -55,7 +55,7 @@ func (a *Agent) WithTSIG(name string, secret []byte) *Agent {
 	return a
 }
 
-// WithTLS reaches the server over DNS-over-TLS (RFC 8483) with cfg (protocol §11).
+// WithTLS reaches the server over DNS-over-TLS (RFC 7858) with cfg (protocol §8).
 // Pair it with WithInsecureSkipVerify for self-signed certificates.
 func (a *Agent) WithTLS(cfg *tls.Config) *Agent {
 	a.client.WithTLS(cfg)
@@ -64,14 +64,14 @@ func (a *Agent) WithTLS(cfg *tls.Config) *Agent {
 
 // WithInsecureSkipVerify accepts any server certificate (self-signed or
 // hostname-mismatched), weakening TLS to confidentiality + tamper protection
-// (protocol §11). Keep it for tests and local deployments.
+// (protocol §8). Keep it for tests and local deployments.
 func (a *Agent) WithInsecureSkipVerify() *Agent {
 	a.client.WithInsecureSkipVerify()
 	return a
 }
 
 // WithDoH configures the agent to reach its server over DNS-over-HTTPS (RFC 8484)
-// via endpoint (protocol §12). Every query is sent to the DoH endpoint instead of
+// via endpoint (protocol §8). Every query is sent to the DoH endpoint instead of
 // the direct server address, which is how an agent reaches the authoritative
 // server through a normal resolver.
 func (a *Agent) WithDoH(endpoint string) *Agent {

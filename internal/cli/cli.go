@@ -13,7 +13,7 @@ import (
 )
 
 // ParseKeys parses a "tool=key,tool=key" list of per-tool HMAC keys
-// (protocol §8). An empty string yields a nil map; an entry without '=' or
+// (protocol §7.3). An empty string yields a nil map; an entry without '=' or
 // with an empty tool name is an error, so a bad flag fails at startup.
 func ParseKeys(s string) (map[string]string, error) {
 	s = strings.TrimSpace(s)

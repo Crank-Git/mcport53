@@ -85,21 +85,30 @@ not equal a reserved structural label.
 ### 2.3 Call name
 
 ```
-<sig>.<arg-labels...>.<tool>.call.<nonce>.<zone>
+unsigned:  <arg-labels...>.<tool>.call.<nonce>.<zone>
+signed:    <sig>.<arg-labels...>.<tool>.call.signed.<nonce>.<zone>
 ```
 
 Reading **right-to-left**:
 
 1. `<zone>` — the authoritative base domain (1+ labels).
-2. `<nonce>` — a unique random label (see §6). Makes the name uncacheable.
-3. literal `call`.
-4. `<tool>` — the tool name (single label).
-5. `<arg-labels...>` — base32-encoded, chunked arguments, most-significant chunk
+2. `<nonce>` — a unique random 16-character label (see §6). Makes the name
+   uncacheable.
+3. literal `signed` — present only on signed calls; marks the leftmost label as the
+   signature.
+4. literal `call`.
+5. `<tool>` — the tool name (single label).
+6. `<arg-labels...>` — base32-encoded, chunked arguments, most-significant chunk
    leftmost. Zero or more labels.
-6. `<sig>` — optional HMAC signature label (see §7). Absent = unsigned.
+7. `<sig>` — the 34-character HMAC signature label (see §7.1), signed calls only.
 
-The client concatenates the arg labels left-to-right and base32-decodes them to
+The server concatenates the arg labels left-to-right and base32-decodes them to
 recover the argument bytes.
+
+The whole name must fit the 255-byte DNS limit (RFC 1035 §2.3.4), which bounds the
+argument size: on the zone `example.` a call can carry about 134 bytes of
+arguments unsigned and 108 signed. The client checks the length before sending and
+reports the limit for its zone.
 
 ### 2.4 Result / chunk / job names
 
@@ -128,11 +137,10 @@ lowercase, no padding)** and **chunked into ≤63-byte labels**.
 3. Split `b32` into consecutive substrings of ≤63 chars. Each becomes one DNS
    label, most-significant first.
 
-Example: args `{"q":"hi"}` → JSON `{"q":"hi"}` → 13 bytes → base32
-`NBSWY3DPF3SXV53TN2TXQ53J` → labels `nbswy3dpf3sxv53tn2txq53j`.
+Example: args `{"q":"hi"}` → 10 bytes → base32 `pmrhcir2ejugsit5` → one label.
 
 Full call name:
-`nbswy3dpf3sxv53tn2txq53j.tool.call.<nonce>.example`
+`pmrhcir2ejugsit5.tool.call.<nonce>.example`
 
 **Encoding alphabet & charset rule:** only `a–z` and `2–7` are emitted, guaranteeing
 DNS-safety and avoiding case/`-`/`_` ambiguity.
@@ -141,7 +149,12 @@ DNS-safety and avoiding case/`-`/`_` ambiguity.
 
 ## 4. Result envelope
 
-Results are returned in a **TXT** record. The TXT carries a single JSON **envelope**:
+Results are returned in a **TXT** record carrying a single JSON **envelope**. On
+the wire the envelope JSON is **base64-encoded** and split into consecutive TXT
+character-strings of at most 252 bytes (a multiple of 4, so each string decodes on
+its own); the client decodes each string and concatenates the bytes. Base64 keeps
+the payload in a character set every DNS library and resolver passes through
+unchanged.
 
 ```json
 {
@@ -178,13 +191,15 @@ server bounds the marshaled envelope at **600 bytes** and result chunks at **240
 bytes** of payload:
 
 - If the marshaled envelope fits in **≤ 600 bytes**, return it directly.
-- If it is larger **but complete**, return `chunked`:
+- If it is larger **but complete**, return `chunked`. `result` carries this chunk's
+  bytes, base64-encoded (`chunk` is omitted when it is 0):
   ```json
-  {"v":1,"status":"chunked","session":"s1","chunk":0,"total":3,"more":true,
-   "chunk":"<base64 of this chunk's bytes>"}
+  {"v":1,"status":"chunked","tool":"big","session":"s1","total":3,"more":true,
+   "result":"<base64 of chunk 0's bytes>"}
   ```
-  The client fetches `<chunk>.<session>.chunk.<zone>` for `chunk = 1..total-1`,
-  concatenating the `chunk` bytes. Final chunk has `more=false`.
+  The first chunk arrives with the call. The client fetches
+  `<chunk>.<session>.chunk.<zone>` for `chunk = 1..total-1` and concatenates the
+  decoded `result` bytes. The final chunk has `more=false`.
   Sessions are short-lived: the server keeps them for a bounded time (default
   5 minutes) and within bounded memory, dropping the oldest first. A chunk query
   for an expired or dropped session returns an `error` envelope; the client
@@ -327,8 +342,14 @@ Nonces also defeat caching (§6) because every name is unique.
 ### 7.3 Auth model
 
 - Shared-secret (HMAC) is the default — simple, no PKI, fits the DNS world.
-- The secret can be distributed out-of-band or, for a first step, per-tool via an
-  authenticated discovery extension (future work).
+  Secrets are distributed out-of-band.
+- **Per-tool keys.** A server may hold a key per tool, falling back to a default
+  key; the client signs each call with the key for the tool it calls. A key for one
+  tool cannot authorize another.
+- **Signed discovery.** A server with a default key signs its discovery document:
+  `sig` in the document is the §7.1 label over the JSON document (with `sig`
+  removed), tool `discovery`, an empty nonce and timestamp 0. A client holding the
+  key rejects a document that is unsigned or does not verify.
 
 ---
 
@@ -366,12 +387,12 @@ Nonces also defeat caching (§6) because every name is unique.
 application layer (§7). For defense in depth, the transport can additionally be
 protected:
 
-- **DNS-over-TLS (RFC 8483).** Serve over `tcp-tls` instead of UDP. The client
+- **DNS-over-TLS (RFC 7858).** Serve over `tcp-tls` instead of UDP. The client
   switches to the `tcp-tls` net via `Client.WithTLS(&tls.Config{})` (or the
   `pkg/mcp` server's `WithTLS` + `ApplyTransport`); pair with
   `WithInsecureSkipVerify` for self-signed certificates. This gives
   confidentiality and server authentication.
-- **TSIG (RFC 2845).** Sign every query with a shared HMAC-SHA256 secret. The
+- **TSIG (RFC 8945).** Sign every query with a shared HMAC-SHA256 secret. The
   server verifies each query's signature *before* any handler runs (an unsigned
   or wrong-secret query is rejected) and signs its responses with the same key, so
   the client can confirm the answer's origin and integrity. Configure the server
@@ -390,19 +411,23 @@ Both are optional and independent; either or both may be enabled. See `pkg/mcp`
 **Discovery.** Client queries SRV + TXT at `_mcp._udp.example.`:
 
 ```
-_txt._mcp._udp.example.  SRV  0 0 53 dns.example.
-_txt._mcp._udp.example.  TXT  "{\"version\":1,\"tools\":[\n  {\"name\":\"echo\",..."
+_mcp._udp.example.  SRV  0 0 53 dns.example.
+_mcp._udp.example.  TXT  "<base64 of {\"version\":1,\"tools\":[{\"name\":\"echo\",...}]}>"
 ```
 
 **Call.** Client wants to call tool `echo` with `{"text":"hi"}`:
 
-1. JSON: `{"text":"hi"}` → base32 `4XH233NPORRGY43J3BS3Q43NFZZSS43JN2` (illustrative).
-2. Chunk into ≤63 labels, pick nonce `abcd1234`, sign → `sig=...`.
-3. Query: `siglabel.xxxxxxxx.echo.call.abcd1234.example`.
-4. Answer: `TXT "{\"v\":1,\"status\":\"ok\",\"tool\":\"echo\",\"result\":\"{\\\"ok\\\":true,\\\"value\\\":\\\"hi\\\"}\",\"ms\":1}"`.
+1. JSON `{"text":"hi"}` (13 bytes) → base32 `pmrhizlyoqrduitinerh2`.
+2. Pick a nonce, e.g. `k3v7q2m4x6z8a2b4`, and, for a signed call, compute the
+   34-character signature label (§7.1).
+3. Query (TXT):
+   `<sig>.pmrhizlyoqrduitinerh2.echo.call.signed.k3v7q2m4x6z8a2b4.example.`
+4. Answer: one TXT record whose strings base64-decode to
+   `{"v":1,"status":"ok","tool":"echo","result":"{\"kind\":\"json\",\"value\":...}","ms":1}`.
 
-**Large result.** Server returns `chunked` with `session=abc`, `chunk=0`, `total=2`, `more=true`.
-Client fetches `0.abc.chunk.example`, then `1.abc.chunk.example`, concatenates.
+**Large result.** The call is answered `chunked` with `session=abc`, `total=3`,
+`more=true` and chunk 0 in `result`. The client fetches `1.abc.chunk.example.` and
+`2.abc.chunk.example.` and concatenates the three chunks.
 
 **Long-running.** Server returns `queued`/`job=j1`. Client polls `j1.job.example`
 until `done`/`session=s2`, then fetches the session result.
@@ -411,11 +436,9 @@ until `done`/`session=s2`, then fetches the session result.
 
 ## 10. Open issues / future work
 
-- **Secret distribution & identity.** Move beyond shared secret: per-tool keys,
-  delegated discovery with auth (e.g. signed discovery documents).
-- **Compression.** zstd/gzip inside `result` for very large payloads.
-- **Pagination cursor** vs. fixed chunk indices for streaming results. Cursors are
-  now implemented (see §4.4); fixed indices remain supported.
+- **Identity beyond shared secrets.** Per-tool keys and signed discovery (§7.3) are
+  implemented; public-key signatures would remove the need to share secrets.
+- **zstd.** Reserved as a compression kind (§4.4); only gzip is implemented.
 
 ---
 
@@ -425,8 +448,8 @@ until `done`/`session=s2`, then fetches the session result.
 docs/            protocol & design docs
 internal/codec/  base32 label encoding, chunking, envelopes
 internal/dns/    DNS server (authoritative) + client (miekg/dns)
-internal/proto/  discovery, call routing, job/session protocol
-internal/auth/   HMAC signing, nonce, replay protection
-pkg/mcp/         tool registry + MCP SDK adapter
+internal/auth/   HMAC signing, per-tool keys, replay protection
+internal/cli/    flag parsing shared by the binaries
+pkg/mcp/         tool registry, MCP SDK adapter, result store, agent
 cmd/             mcp53-server, mcp53-client binaries
 ```

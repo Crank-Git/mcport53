@@ -24,12 +24,12 @@ type Client struct {
 	timeout      time.Duration
 	dc           *dns.Client
 	signer       func(tool, nonce string, args []byte, ts int64) string // optional per-call signer
-	discoveryKey []byte                                                 // optional key to verify signed discovery documents (protocol §8)
-	dohURL       string                                                 // optional DoH endpoint (RFC 8484); when set, queries go here (protocol §12)
+	discoveryKey []byte                                                 // optional key to verify signed discovery documents (protocol §7.3)
+	dohURL       string                                                 // optional DoH endpoint (RFC 8484); when set, queries go here (protocol §8)
 	httpClient   *http.Client                                           // used when dohURL is set
-	tsig         *TsigKeys                                              // optional TSIG keys for transport integrity (protocol §11)
-	tsigName     string                                                 // canonical TSIG key name used to sign outgoing queries (protocol §11)
-	insecureSkip bool                                                   // skip TLS certificate verification (protocol §11)
+	tsig         *TsigKeys                                              // optional TSIG keys for transport integrity (protocol §8)
+	tsigName     string                                                 // canonical TSIG key name used to sign outgoing queries (protocol §8)
+	insecureSkip bool                                                   // skip TLS certificate verification (protocol §8)
 }
 
 // NewClient builds a Client for the server at serverAddr ("host:port"). The
@@ -96,14 +96,14 @@ func (c *Client) WithSigner(signer func(tool, nonce string, args []byte, ts int6
 }
 
 // WithDiscoveryKey installs the key used to verify signed discovery documents
-// (protocol §8). When set, Discovery rejects documents that are unsigned or whose
+// (protocol §7.3). When set, Discovery rejects documents that are unsigned or whose
 // signature does not verify.
 func (c *Client) WithDiscoveryKey(key []byte) *Client {
 	c.discoveryKey = key
 	return c
 }
 
-// WithTSIG signs every query with a TSIG over the shared secret (protocol §11).
+// WithTSIG signs every query with a TSIG over the shared secret (protocol §8).
 // name is the TSIG key name; the server must hold the same secret for that name.
 // The response is verified with the same secret, so the exchange is authenticated
 // and integrity-checked at the transport layer, in addition to any application
@@ -118,10 +118,10 @@ func (c *Client) WithTSIG(name string, secret []byte) *Client {
 	return c
 }
 
-// WithTLS makes the client reach the server over DNS-over-TLS (RFC 8483) by
+// WithTLS makes the client reach the server over DNS-over-TLS (RFC 7858) by
 // switching the transport to tcp-tls with cfg. TLS provides confidentiality and
 // server authentication; pair it with WithInsecureSkipVerify for self-signed
-// certificates (protocol §11). TSIG may be layered on top for message-level
+// certificates (protocol §8). TSIG may be layered on top for message-level
 // authentication as well.
 func (c *Client) WithTLS(cfg *tls.Config) *Client {
 	c.dc.Net = "tcp-tls"
@@ -132,7 +132,7 @@ func (c *Client) WithTLS(cfg *tls.Config) *Client {
 // WithInsecureSkipVerify accepts any server certificate (self-signed or
 // hostname-mismatched). It weakens TLS to confidentiality + tamper protection
 // only; keep it for tests and local deployments, never against a public server
-// (protocol §11).
+// (protocol §8).
 func (c *Client) WithInsecureSkipVerify() *Client {
 	if c.dc.TLSConfig == nil {
 		c.dc.TLSConfig = &tls.Config{InsecureSkipVerify: true}
@@ -144,7 +144,7 @@ func (c *Client) WithInsecureSkipVerify() *Client {
 
 // WithDoH configures the client to reach the server over DNS-over-HTTPS (RFC 8484)
 // via endpoint, for example "https://dns.example/dns-query". When set, every query
-// is sent to the DoH endpoint instead of the direct --server address (protocol §12),
+// is sent to the DoH endpoint instead of the direct --server address (protocol §8),
 // which is how an agent reaches the authoritative server through a normal resolver.
 func (c *Client) WithDoH(endpoint string) *Client {
 	c.dohURL = endpoint
@@ -243,9 +243,9 @@ func (c *Client) Query(name string, qtype uint16) (*dns.Msg, error) {
 }
 
 // exchange sends m and returns the response. When the client is configured with a
-// DoH endpoint (see WithDoH) the query goes there (protocol §12); otherwise it is
+// DoH endpoint (see WithDoH) the query goes there (protocol §8); otherwise it is
 // sent directly to the server address over UDP/TCP. When TSIG is configured
-// (protocol §11) the query is signed with the shared secret.
+// (protocol §8) the query is signed with the shared secret.
 //
 // Queries advertise EDNS0 with EDNSBufferSize. A UDP answer that comes back
 // truncated (TC=1) is retried over TCP, which carries the full answer.

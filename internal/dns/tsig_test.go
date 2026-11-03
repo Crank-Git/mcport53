@@ -242,7 +242,7 @@ func startDoTServer(t *testing.T, srv *Server, srvTLS *tls.Config) string {
 }
 
 // TestServerWithTLS checks that WithTLS records the TLS config so that
-// ListenAndServe serves over DoT (protocol §11).
+// ListenAndServe serves over DoT (protocol §8).
 func TestServerWithTLS(t *testing.T) {
 	srv := NewServer(testZone, &Handlers{}).WithTLS(&tls.Config{})
 	if srv.tls == nil {
@@ -252,7 +252,7 @@ func TestServerWithTLS(t *testing.T) {
 
 // TestServerWithTSIGKeys checks that a server configured with an explicit
 // TsigKeys set (rather than a single With secret) verifies queries for any of
-// the installed keys (protocol §11).
+// the installed keys (protocol §8).
 func TestServerWithTSIGKeys(t *testing.T) {
 	ks := NewTsigKeys()
 	ks.With("mcport53.", []byte("secret-one"))
@@ -344,7 +344,7 @@ func waitForReady(t *testing.T, c *Client, errc <-chan error) bool {
 }
 
 // TestListenAndServeUDP starts a server via Server.ListenAndServe on UDP (the
-// default transport) and confirms a signed call is served (protocol §11).
+// default transport) and confirms a signed call is served (protocol §8).
 func TestListenAndServeUDP(t *testing.T) {
 	ks := NewTsigKeys()
 	ks.With("mcport53.", []byte("secret"))
@@ -379,7 +379,7 @@ func TestListenAndServeUDP(t *testing.T) {
 }
 
 // TestListenAndServeDoT starts a server via Server.ListenAndServe over
-// DNS-over-TLS (tcp-tls) and confirms a TLS client reaches it (protocol §11).
+// DNS-over-TLS (tcp-tls) and confirms a TLS client reaches it (protocol §8).
 func TestListenAndServeDoT(t *testing.T) {
 	ks := NewTsigKeys()
 	ks.With("mcport53.", []byte("secret"))
@@ -414,7 +414,7 @@ func TestListenAndServeDoT(t *testing.T) {
 }
 
 // TestClientWithInsecureSkipVerify checks that WithInsecureSkipVerify sets (and
-// does not replace) the TLS config's InsecureSkipVerify flag (protocol §11).
+// does not replace) the TLS config's InsecureSkipVerify flag (protocol §8).
 func TestClientWithInsecureSkipVerify(t *testing.T) {
 	c := NewClient("127.0.0.1:5353")
 	if c.dc.TLSConfig != nil {
@@ -472,7 +472,7 @@ func TestTsigProviderErrors(t *testing.T) {
 }
 
 // TestTsigProviderGenerateVerifyRoundTrip checks that a provider signs a message
-// and Verify accepts the resulting MAC (protocol §11).
+// and Verify accepts the resulting MAC (protocol §8).
 func TestTsigProviderGenerateVerifyRoundTrip(t *testing.T) {
 	secret := []byte("round-trip-secret")
 	p := tsigProvider{secrets: map[string]string{"mcport53.": base64.StdEncoding.EncodeToString(secret)}}

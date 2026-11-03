@@ -8,7 +8,7 @@ import (
 	"github.com/miekg/dns"
 )
 
-// TestTSIGLowLevelVerify is a regression guard for the protocol §11 TSIG bug
+// TestTSIGLowLevelVerify is a regression guard for the protocol §8 TSIG bug
 // where a server reported "no signature found" for a correctly signed query.
 // It signs a message at the raw miekg level and confirms both direct verification
 // and verification by a raw miekg server (which strips the TSIG before checking).
