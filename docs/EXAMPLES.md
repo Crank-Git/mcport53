@@ -21,8 +21,10 @@ mcp53-server: listening on 127.0.0.1:5333 for zone example. (3 tools)
 
 Flags: `--zone` (authoritative base domain, default `example.`),
 `--addr` (listen address, default `127.0.0.1:5333`),
-`--secret` (optional HMAC shared secret, see [Signing calls](#6-signing-calls)),
-`--discover` (SRV target advertised in discovery, default `127.0.0.1:53`).
+`--secret` / `--key` / `--keys` (HMAC call signing, see [Signing calls](#6-signing-calls)),
+`--tsig`, `--tls-cert` / `--tls-key` (transport security, see
+[Transport security](#61-transport-security-tsig-and-dns-over-tls)),
+`--discover` (SRV target advertised in discovery, default: the `--addr` value).
 
 `--discover` controls what the `_mcp._udp` SRV record points clients at (protocol
 §2.1). Leave it at the default for local runs; in a real deployment point it at
@@ -103,15 +105,47 @@ result before printing it; the server tracks the job by session. See
 
 ## 6. Signing calls
 
-To protect calls from tampering and replay, start the server with a shared
-secret and the client will sign each call.
+To protect calls from tampering and replay, start the server with a key and pass
+the same key to the client, which signs each call.
 
 ```bash
-go run ./cmd/mcp53-server --zone example. --secret s3cr3t
+go run ./cmd/mcp53-server --zone example. --key s3cr3t
+go run ./cmd/mcp53-client --zone example. --key s3cr3t --tool echo --args '{"text":"hi"}'
 ```
 
-Calls made without the matching secret are rejected by the server. See
+Unsigned calls and calls signed with another key are rejected by the server.
+`--secret` on the server accepts the same client `--key`.
+
+Per-tool keys override the default key for named tools, on both sides:
+
+```bash
+go run ./cmd/mcp53-server --key default-key --keys echo=echo-key
+go run ./cmd/mcp53-client --key default-key --keys echo=echo-key --tool echo --args '{"text":"hi"}'
+```
+
+A server started with `--key` also signs its discovery document. Add
+`--verify-discovery` to the client to reject a document that is unsigned or
+signed with another key. See
 [protocol §7](PROTOCOL.md#7-auth-replay-protection-optional).
+
+### 6.1 Transport security: TSIG and DNS-over-TLS
+
+TSIG signs every query and response at the DNS layer:
+
+```bash
+go run ./cmd/mcp53-server --tsig mcport53.:tsig-secret
+go run ./cmd/mcp53-client --tsig mcport53.:tsig-secret --tool echo --args '{"text":"hi"}'
+```
+
+DNS-over-TLS encrypts the exchange. The client trusts the system roots, or the
+certificates in `--tls-ca` (for a private CA or self-signed certificate):
+
+```bash
+go run ./cmd/mcp53-server --tls-cert cert.pem --tls-key key.pem
+go run ./cmd/mcp53-client --tls --tls-ca cert.pem --tool echo --args '{"text":"hi"}'
+```
+
+`--tls-insecure` skips certificate verification; use it only for testing.
 
 ## 7. Pointing at a real resolver
 

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Crank-Git/mcport53/internal/auth"
+	"github.com/Crank-Git/mcport53/internal/cli"
 	"github.com/Crank-Git/mcport53/internal/dns"
 	"github.com/Crank-Git/mcport53/pkg/mcp"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -28,9 +28,15 @@ func main() {
 		secret   = flag.String("secret", "", "optional shared secret for HMAC call signatures (protocol §7)")
 		key      = flag.String("key", "", "default HMAC key for per-tool call signatures and signed discovery (protocol §8)")
 		keys     = flag.String("keys", "", "optional per-tool key overrides as tool=key,tool=key (protocol §8)")
-		discover = flag.String("discover", "127.0.0.1:53", "SRV target advertised in discovery (host:port)")
+		discover = flag.String("discover", "", "SRV target advertised in discovery (host:port; default --addr)")
+		tsig     = flag.String("tsig", "", "require TSIG on every query, as name:secret (protocol §8)")
+		tlsCert  = flag.String("tls-cert", "", "serve DNS-over-TLS with this PEM certificate (with --tls-key)")
+		tlsKey   = flag.String("tls-key", "", "PEM private key for --tls-cert")
 	)
 	flag.Parse()
+	if *discover == "" {
+		*discover = *addr
+	}
 
 	discoverHost, discoverPort, err := parseDiscover(*discover)
 	if err != nil {
@@ -41,13 +47,9 @@ func main() {
 	server := mcp.NewServer(registry)
 	switch {
 	case *key != "":
-		perTool, err := parseKeys(*keys)
+		reg, err := cli.KeyRegistry(*key, *keys)
 		if err != nil {
 			log.Fatalf("mcp53-server: %v", err)
-		}
-		reg := auth.NewKeyRegistry([]byte(*key))
-		for tool, secret := range perTool {
-			reg.Add(tool, []byte(secret))
 		}
 		server.WithKeys(reg)
 		server.WithDiscoveryKey([]byte(*key))
@@ -55,9 +57,25 @@ func main() {
 		server.WithVerify(mcp.HMACVerify([]byte(*secret), 0, 0))
 	}
 
+	if *tsig != "" {
+		name, secret, err := cli.ParseTSIG(*tsig)
+		if err != nil {
+			log.Fatalf("mcp53-server: %v", err)
+		}
+		server.WithTSIG(name, secret)
+	}
+	if *tlsCert != "" || *tlsKey != "" {
+		cfg, err := cli.ServerTLS(*tlsCert, *tlsKey)
+		if err != nil {
+			log.Fatalf("mcp53-server: %v", err)
+		}
+		server.WithTLS(cfg)
+	}
+
 	handlers := server.Handlers()
 	dnsSrv := dns.NewServer(*zone, &handlers)
 	dnsSrv = dnsSrv.WithDiscovery(discoverHost, discoverPort)
+	dnsSrv = server.ApplyTransport(dnsSrv)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -138,29 +156,6 @@ func textResult(text string) *sdkmcp.CallToolResult {
 	return &sdkmcp.CallToolResult{
 		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: text}},
 	}
-}
-
-// parseKeys parses a "tool=key,tool=key" string into a map of tool name to
-// per-tool secret (protocol §8). An empty string yields a nil map; a malformed
-// entry (missing '=') returns an error so a bad --keys value is caught at startup.
-func parseKeys(s string) (map[string]string, error) {
-	out := map[string]string{}
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil, nil
-	}
-	for _, pair := range strings.Split(s, ",") {
-		pair = strings.TrimSpace(pair)
-		if pair == "" {
-			continue
-		}
-		tool, secret, ok := strings.Cut(pair, "=")
-		if !ok {
-			return nil, fmt.Errorf("invalid --keys entry %q: want tool=key", pair)
-		}
-		out[strings.ToLower(strings.TrimSpace(tool))] = secret
-	}
-	return out, nil
 }
 
 // parseDiscover parses a "host:port" string into the SRV target host and port
