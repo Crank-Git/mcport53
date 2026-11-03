@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"strings"
 
@@ -107,6 +108,17 @@ func (s *Server) Handler() dns.Handler { return s }
 // ServeDNS implements dns.Handler. It dispatches a single question by the shape
 // of its name under the server's zone (protocol §2).
 func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
+	// A handler panic must cost one query, not the process: miekg/dns does not
+	// recover panics, so an unrecovered one exits the server.
+	defer func() {
+		if v := recover(); v != nil {
+			log.Printf("dns: recovered panic serving %s: %v", questionName(r), v)
+			fail := reply(r)
+			fail.Rcode = dns.RcodeServerFailure
+			_ = w.WriteMsg(fail)
+		}
+	}()
+
 	m := new(dns.Msg)
 	*m = *reply(r)
 	m.Authoritative = true
@@ -278,6 +290,15 @@ func (s *Server) verifyTSIG(w dns.ResponseWriter, r *dns.Msg) error {
 		return err
 	}
 	return nil
+}
+
+// questionName returns the first question's name for logging, or "" when the
+// message has no question.
+func questionName(r *dns.Msg) string {
+	if r == nil || len(r.Question) == 0 {
+		return ""
+	}
+	return r.Question[0].Name
 }
 
 // callerAddr returns the host portion of a remote address, used as the caller
