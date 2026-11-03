@@ -200,14 +200,61 @@ func (c *Client) Call(zone, tool string, args []byte, sig string) (*codec.Envelo
 		sig = c.signer(tool, nonce, args, time.Now().Unix())
 	}
 	labels := codec.BuildCallName(zoneLabels(zone), tool, args, nonce, sig)
-	if err := codec.CheckName(labels); err != nil {
-		// Fail before sending: an over-long name is answered FORMERR (or
-		// dropped by a resolver), which tells the caller nothing.
-		max := codec.MaxCallArgs(zoneLabels(zone), tool, nonce, sig)
-		return nil, fmt.Errorf("dns: %d bytes of arguments for %s do not fit in a DNS name (max %d for this zone and signing): %w",
-			len(args), tool, max, err)
+	if codec.CheckName(labels) != nil {
+		// Too large for one name: upload the arguments in parts, then call
+		// with a reference to them (protocol §3.1).
+		return c.callWithUpload(zone, tool, args, nonce, sig)
 	}
 	return c.queryEnvelope(LabelsToName(labels), dns.TypeTXT)
+}
+
+// uploadConcurrency is how many upload parts are in flight at once.
+const uploadConcurrency = 8
+
+// callWithUpload sends args as upload parts and then the call that references
+// them. The signature (computed over args) is the same as for an inline call.
+func (c *Client) callWithUpload(zone, tool string, args []byte, nonce, sig string) (*codec.Envelope, error) {
+	zl := zoneLabels(zone)
+	if len(args) > DefaultUploadMaxBytes {
+		return nil, fmt.Errorf("dns: %d bytes of arguments for %s exceed the %d-byte upload limit", len(args), tool, DefaultUploadMaxBytes)
+	}
+	id, err := codec.RandomSession()
+	if err != nil {
+		return nil, err
+	}
+	call := codec.BuildUploadCallName(zl, tool, id, 1, nonce, sig)
+	if err := codec.CheckName(call); err != nil {
+		return nil, fmt.Errorf("dns: call name for %s does not fit even with uploaded arguments: %w", tool, err)
+	}
+	per := codec.MaxUploadPart(zl, id, len(fmt.Sprint(DefaultUploadMaxParts)))
+	if per <= 0 {
+		return nil, fmt.Errorf("dns: zone %s leaves no room for upload parts: %w", zone, codec.ErrNameTooLong)
+	}
+	parts := codec.ChunkPayload(args, per)
+
+	errs := make(chan error, len(parts))
+	sem := make(chan struct{}, uploadConcurrency)
+	for i, p := range parts {
+		sem <- struct{}{}
+		go func(i int, p []byte) {
+			defer func() { <-sem }()
+			e, err := c.queryEnvelope(LabelsToName(codec.UploadPartName(zl, id, i, p)), dns.TypeTXT)
+			switch {
+			case err != nil:
+				errs <- fmt.Errorf("dns: uploading part %d of %d: %w", i, len(parts), err)
+			case e.Status != codec.StatusOK:
+				errs <- fmt.Errorf("dns: uploading part %d of %d: %s", i, len(parts), e.Error)
+			default:
+				errs <- nil
+			}
+		}(i, p)
+	}
+	for range parts {
+		if err := <-errs; err != nil {
+			return nil, err
+		}
+	}
+	return c.queryEnvelope(LabelsToName(codec.BuildUploadCallName(zl, tool, id, len(parts), nonce, sig)), dns.TypeTXT)
 }
 
 // Chunk fetches one result chunk by session using a fixed chunk index

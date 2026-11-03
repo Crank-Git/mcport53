@@ -26,6 +26,7 @@ var reservedToolNames = map[string]bool{
 	"schema": true,
 	"chunk":  true,
 	"job":    true,
+	"upload": true,
 }
 
 // Tool is a registered callable tool. Call receives the raw JSON argument bytes
