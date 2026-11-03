@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      - name: Determine Go sources
+        id: src
+        run: |
+          count=$(git ls-files '*.go' | wc -l | tr -d ' ')
+          echo "go_files=$count" >> "$GITHUB_OUTPUT"
+
+      # A real recursive resolver for the end-to-end resolver tests. The binary
+      # is copied out of /usr/sbin so the distribution's AppArmor profile (which
+      # confines it to /etc/unbound) does not block the test's temp config.
+      - name: Install Unbound
+        if: steps.src.outputs.go_files != '0'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q unbound
+          sudo systemctl stop unbound || true
+          mkdir -p "$RUNNER_TEMP/bin"
+          cp /usr/sbin/unbound "$RUNNER_TEMP/bin/unbound"
+          echo "MCP53_UNBOUND=$RUNNER_TEMP/bin/unbound" >> "$GITHUB_ENV"
+          echo "MCP53_REQUIRE_UNBOUND=1" >> "$GITHUB_ENV"
+
+      - name: Download modules
+        if: steps.src.outputs.go_files != '0'
+        run: go mod download
+
+      - name: Build
+        if: steps.src.outputs.go_files != '0'
+        run: go build ./...
+
+      - name: Vet
+        if: steps.src.outputs.go_files != '0'
+        run: go vet ./...
+
+      - name: Gofmt
+        if: steps.src.outputs.go_files != '0'
+        run: test -z "$(gofmt -l $(git ls-files '*.go'))"
+
+      - name: Tidy
+        if: steps.src.outputs.go_files != '0'
+        run: go mod tidy -diff
+
+      - name: Test
+        if: steps.src.outputs.go_files != '0'
+        run: go test -race ./...

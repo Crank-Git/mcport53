@@ -9,7 +9,6 @@ dist/
 
 # Go
 /bin/
-/pkg/
 test_bin/
 *.out
 coverage.txt
@@ -18,3 +17,7 @@ coverage.txt
 .idea/
 .vscode/
 .DS_Store
+
+# Built binaries (root)
+/mcp53-server
+/mcp53-client
