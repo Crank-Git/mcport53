@@ -246,14 +246,26 @@ func (c *Client) Query(name string, qtype uint16) (*dns.Msg, error) {
 // DoH endpoint (see WithDoH) the query goes there (protocol §12); otherwise it is
 // sent directly to the server address over UDP/TCP. When TSIG is configured
 // (protocol §11) the query is signed with the shared secret.
+//
+// Queries advertise EDNS0 with EDNSBufferSize. A UDP answer that comes back
+// truncated (TC=1) is retried over TCP, which carries the full answer.
 func (c *Client) exchange(m *dns.Msg) (*dns.Msg, error) {
+	if m.IsEdns0() == nil {
+		m.SetEdns0(EDNSBufferSize, false)
+	}
 	if c.dohURL != "" {
 		return c.dohExchange(m)
 	}
 	if c.tsig != nil {
 		m.SetTsig(c.tsigName, c.tsig.Algorithm(), c.tsig.Fudge(), 0)
 	}
-	resp, _, err := c.dc.Exchange(m, c.server)
+	resp, _, err := c.dc.Exchange(m.Copy(), c.server)
+	if err != nil || !resp.Truncated || c.dc.Net != "udp" && c.dc.Net != "" {
+		return resp, err
+	}
+	tcp := *c.dc
+	tcp.Net = "tcp"
+	resp, _, err = tcp.Exchange(m, c.server)
 	return resp, err
 }
 

@@ -325,9 +325,12 @@ Nonces also defeat caching (§6) because every name is unique.
 
 ## 8. Transport details
 
-- **Transport:** UDP (and TCP fallback for oversized messages, per RFC 1035 §4.2.1).
-  Query messages stay small (args are chunked into labels), so UDP almost always
-  suffices.
+- **Transport:** UDP, with TCP on the same port for answers that do not fit
+  (RFC 1035 §4.2.1, RFC 7766). The server answers a UDP query within the size the
+  requester advertises in EDNS0 (RFC 6891), or 512 bytes without EDNS, and sets
+  `TC=1` when it has to drop the answer; the requester retries over TCP. Clients
+  advertise EDNS0 with a 1232-byte buffer (the DNS Flag Day 2020 default) and
+  retry truncated answers over TCP automatically.
 - **Port:** client → server on UDP/53 (or a custom port advertised in SRV). Using
   53 is what lets traffic traverse restrictive egress.
 - **Message format:** standard DNS `QUERY` with `RD=1`, and `ANSWER` RRsets. No

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/Crank-Git/mcport53/internal/codec"
 	"github.com/miekg/dns"
@@ -80,7 +81,23 @@ type Server struct {
 	srvPort    uint16      // SRV port advertised in discovery; defaults to 53
 	tsig       *TsigKeys   // optional TSIG keys for transport-layer integrity (protocol §11)
 	tls        *tls.Config // optional TLS config; when set, ListenAndServe serves over DoT (protocol §11)
+
+	mu      sync.Mutex
+	running []*dns.Server // listeners started by ListenAndServe, for Shutdown
 }
+
+// EDNS sizes (RFC 6891). The server answers UDP queries within the size the
+// requester advertises, or 512 bytes when it advertises none.
+const (
+	minUDPSize = dns.MinMsgSize // 512: the RFC 1035 UDP limit without EDNS
+	maxUDPSize = 4096           // cap on a requester's advertised size
+	// EDNSBufferSize is the UDP payload size this implementation advertises
+	// (the DNS Flag Day 2020 default, which avoids IP fragmentation).
+	EDNSBufferSize = 1232
+	// tsigReserve is room kept for the TSIG record that is appended after
+	// truncation; a hmac-sha256 TSIG with a short key name is about 100 bytes.
+	tsigReserve = 128
+)
 
 // NewServer builds a Server authoritative for zone (e.g. "example." or
 // "mcp.example.").
@@ -165,6 +182,7 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	default:
 		m.Rcode = dns.RcodeNameError
 	}
+	s.fitResponse(w, r, m)
 	// Sign the response with the same TSIG key that authenticated the query
 	// (protocol §11), so the client can confirm the answer came from this server
 	// and was not tampered with on the wire.
@@ -174,6 +192,37 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 	_ = w.WriteMsg(m)
+}
+
+// fitResponse echoes EDNS0 when the query used it and, over UDP, truncates the
+// answer to the requester's advertised size (512 bytes without EDNS), setting
+// TC so the requester retries over TCP (RFC 1035 §4.2.1, RFC 6891 §7).
+func (s *Server) fitResponse(w dns.ResponseWriter, r, m *dns.Msg) {
+	size := minUDPSize
+	if opt := r.IsEdns0(); opt != nil {
+		m.SetEdns0(EDNSBufferSize, false)
+		if n := int(opt.UDPSize()); n > size {
+			size = n
+		}
+	}
+	if !isUDP(w) {
+		return
+	}
+	if size > maxUDPSize {
+		size = maxUDPSize
+	}
+	if s.tsig != nil && r.IsTsig() != nil {
+		size -= tsigReserve
+	}
+	m.Truncate(size)
+}
+
+// isUDP reports whether w answers over UDP.
+func isUDP(w dns.ResponseWriter) bool {
+	if a := w.LocalAddr(); a != nil {
+		return a.Network() == "udp"
+	}
+	return false
 }
 
 // WithTSIG requires every query to carry a valid TSIG signature over secret
@@ -205,20 +254,88 @@ func (s *Server) WithTLS(cfg *tls.Config) *Server {
 	return s
 }
 
-// ListenAndServe starts the server on addr (e.g. "127.0.0.1:53"). It serves over
-// UDP by default, or over DNS-over-TLS when WithTLS has configured a TLS cert.
+// ListenAndServe starts the server on addr (e.g. "127.0.0.1:53") and blocks
+// until a listener fails or Shutdown is called. It serves UDP and TCP on the
+// same address (TCP carries answers too large for UDP), or only DNS-over-TLS
+// when WithTLS has configured a certificate.
+//
+// Sockets are bound before ListenAndServe starts serving, so a bind failure is
+// returned without leaving another listener running.
 func (s *Server) ListenAndServe(addr string) error {
-	dnsSrv := &dns.Server{
-		Addr:         addr,
-		Net:          "udp",
-		Handler:      s,
-		TsigProvider: s.tsig.provider(),
+	var servers []*dns.Server
+	closeAll := func() {
+		for _, srv := range servers {
+			if srv.PacketConn != nil {
+				_ = srv.PacketConn.Close()
+			}
+			if srv.Listener != nil {
+				_ = srv.Listener.Close()
+			}
+		}
+	}
+	newServer := func() *dns.Server {
+		return &dns.Server{Handler: s, TsigProvider: s.tsig.provider()}
 	}
 	if s.tls != nil {
-		dnsSrv.Net = "tcp-tls"
-		dnsSrv.TLSConfig = s.tls
+		l, err := tls.Listen("tcp", addr, s.tls)
+		if err != nil {
+			return err
+		}
+		srv := newServer()
+		srv.Listener = l
+		servers = append(servers, srv)
+	} else {
+		pc, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			return err
+		}
+		udp := newServer()
+		udp.PacketConn = pc
+		servers = append(servers, udp)
+		// Bind TCP to the port UDP actually got (addr may use port 0).
+		l, err := net.Listen("tcp", pc.LocalAddr().String())
+		if err != nil {
+			closeAll()
+			return err
+		}
+		tcp := newServer()
+		tcp.Listener = l
+		servers = append(servers, tcp)
 	}
-	return dnsSrv.ListenAndServe()
+
+	errc := make(chan error, len(servers))
+	ready := make(chan struct{}, len(servers))
+	for _, srv := range servers {
+		srv.NotifyStartedFunc = func() { ready <- struct{}{} }
+		go func() { errc <- srv.ActivateAndServe() }()
+	}
+	// Wait until every listener is serving, so Shutdown always reaches them.
+	for range servers {
+		select {
+		case <-ready:
+		case err := <-errc:
+			closeAll()
+			return err
+		}
+	}
+	s.mu.Lock()
+	s.running = servers
+	s.mu.Unlock()
+
+	err := <-errc // first listener to stop (failure or Shutdown)
+	s.Shutdown()
+	return err
+}
+
+// Shutdown stops every listener started by ListenAndServe.
+func (s *Server) Shutdown() {
+	s.mu.Lock()
+	running := s.running
+	s.running = nil
+	s.mu.Unlock()
+	for _, srv := range running {
+		_ = srv.Shutdown()
+	}
 }
 
 // splitZone separates the labels under the server's zone from the zone labels
