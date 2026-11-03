@@ -8,6 +8,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Crank-Git/mcport53/internal/codec"
 	"github.com/miekg/dns"
@@ -83,6 +84,8 @@ type Server struct {
 	tsig       *TsigKeys   // optional TSIG keys for transport-layer integrity (protocol §8)
 	tls        *tls.Config // optional TLS config; when set, ListenAndServe serves over DoT (protocol §8)
 
+	calls *callCache // deduplicates retransmitted call queries
+
 	mu      sync.Mutex
 	running []*dns.Server // listeners started by ListenAndServe, for Shutdown
 }
@@ -110,7 +113,16 @@ func NewServer(zone string, h *Handlers) *Server {
 		handlers:   *h,
 		srvTarget:  "localhost.",
 		srvPort:    53,
+		calls:      newCallCache(0, 0),
 	}
+}
+
+// WithCallCache sizes the cache that answers retransmitted copies of a call
+// query from the first copy's result (defaults DefaultCallCacheEntries and
+// DefaultCallCacheTTL). The TTL should cover the replay window.
+func (s *Server) WithCallCache(entries int, ttl time.Duration) *Server {
+	s.calls = newCallCache(entries, ttl)
+	return s
 }
 
 // WithDiscovery advertises an SRV record in discovery responses pointing clients
@@ -582,30 +594,62 @@ func (s *Server) serveSchema(r, m *dns.Msg, prefix []string) {
 	buildTXTResponse(r, m, envelopeTXT(e))
 }
 
+// serveCall answers a call query. Copies of the same call name (resolver
+// retransmissions) are answered from the first copy's result; see callCache.
 func (s *Server) serveCall(r, m *dns.Msg, labels []string, caller string) {
+	key := strings.Join(labels, ".")
+	e, leader := s.calls.begin(key)
+	if !leader {
+		txt, ok := s.calls.wait(e)
+		if !ok {
+			txt = envelopeTXT(codec.Error("", "dns: duplicate call did not complete"))
+		}
+		buildTXTResponse(r, m, txt)
+		return
+	}
+	if e == nil { // cache full of in-flight calls: run uncached
+		s.runCall(r, m, labels, caller)
+		return
+	}
+	finished := false
+	defer func() {
+		if !finished {
+			s.calls.abort(e) // the call panicked: release waiters, let a copy retry
+		}
+	}()
+	txt := s.runCall(r, m, labels, caller)
+	s.calls.finish(e, txt)
+	finished = true
+}
+
+// runCall parses, verifies and runs a call, writes the answer into m, and
+// returns the envelope text it answered with.
+func (s *Server) runCall(r, m *dns.Msg, labels []string, caller string) string {
+	txt := s.callTXT(labels, caller)
+	buildTXTResponse(r, m, txt)
+	return txt
+}
+
+func (s *Server) callTXT(labels []string, caller string) string {
 	cn, err := codec.ParseCallName(labels)
 	if err != nil {
-		s.errResp(r, m, "", err.Error())
-		return
+		return envelopeTXT(codec.Error("", err.Error()))
 	}
 	h := s.handlers
 	if h.OnCall == nil {
-		s.errResp(r, m, cn.Tool, "server: no call handler")
-		return
+		return envelopeTXT(codec.Error(cn.Tool, "server: no call handler"))
 	}
 	req := &CallRequest{Tool: cn.Tool, Args: cn.Args, Nonce: cn.Nonce, Sig: cn.Sig, Zone: s.zone, Caller: caller}
 	if h.OnVerify != nil {
 		if err := h.OnVerify(req); err != nil {
-			s.errResp(r, m, cn.Tool, err.Error())
-			return
+			return envelopeTXT(codec.Error(cn.Tool, err.Error()))
 		}
 	}
 	e := h.OnCall(req)
 	if e == nil {
-		s.errResp(r, m, cn.Tool, "call handler returned nil")
-		return
+		return envelopeTXT(codec.Error(cn.Tool, "call handler returned nil"))
 	}
-	buildTXTResponse(r, m, envelopeTXT(e))
+	return envelopeTXT(e)
 }
 
 func (s *Server) serveChunk(r, m *dns.Msg, labels []string) {

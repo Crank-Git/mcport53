@@ -348,6 +348,15 @@ resolver's address).
   calls rather than forgetting a live nonce, which would re-open it for replay.
 - Forged or malformed calls never consume a nonce: the signature is checked first.
 
+**Retransmissions.** Resolvers re-send a query whose answer is slow, and their 0x20
+fallback re-sends the same name. The server therefore remembers the answer to each
+call name (lowercased, so it includes the nonce) for the replay window: the first
+copy runs the call, and every other copy, concurrent or later, receives the same
+answer without running the call or consuming the nonce again. A replayed capture
+of a call therefore gets back the answer the original already received, never a
+second execution; once the remembered answer is gone, the nonce check above
+rejects it.
+
 Nonces also defeat caching (§6) because every name is unique.
 
 ### 7.3 Auth model
