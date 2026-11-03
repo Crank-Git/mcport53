@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"sync"
 
 	"github.com/Crank-Git/mcport53/internal/auth"
 	"github.com/Crank-Git/mcport53/internal/codec"
@@ -25,16 +24,21 @@ type Server struct {
 	discoveryKey []byte                       // optional key signing discovery documents (protocol §8)
 	compress     bool                         // gzip large results into a single envelope (protocol §4.4)
 	useCursor    bool                         // hand out opaque pagination cursors instead of fixed indices (protocol §4.4)
-	cursorMu     sync.Mutex
-	cursorNS     map[string]string // session -> opaque cursor nonce
-	tsigName     string            // optional TSIG key name for transport integrity (protocol §11)
-	tsigSecret   []byte            // optional TSIG shared secret (protocol §11)
-	tls          *tls.Config       // optional DoT certificate config (protocol §11)
+	tsigName     string                       // optional TSIG key name for transport integrity (protocol §11)
+	tsigSecret   []byte                       // optional TSIG shared secret (protocol §11)
+	tls          *tls.Config                  // optional DoT certificate config (protocol §11)
 }
 
 // NewServer builds a Server for the given registry with a fresh result store.
 func NewServer(registry *Registry) *Server {
 	return &Server{registry: registry, results: NewResultStore()}
+}
+
+// WithResultStore replaces the store that holds large results while clients
+// fetch their chunks, for example one built with NewResultStoreWithLimits.
+func (s *Server) WithResultStore(store *ResultStore) *Server {
+	s.results = store
+	return s
 }
 
 // WithVerify sets the optional call-verification hook (protocol §7). A non-nil
@@ -177,7 +181,10 @@ func (s *Server) chunkIfNeeded(tool string, data []byte, ms int) *codec.Envelope
 			}
 		}
 	}
-	session := s.results.Put(data)
+	session, err := s.results.Put(data)
+	if err != nil {
+		return codec.Error(tool, err.Error())
+	}
 	pieces := codec.ChunkPayload(data, codec.ChunkSize)
 	total := len(pieces)
 	encoded := base64.StdEncoding.EncodeToString(pieces[0])
@@ -225,18 +232,9 @@ func (s *Server) nextCursor(session string, idx, total int) string {
 	if idx+1 >= total {
 		return ""
 	}
-	s.cursorMu.Lock()
-	defer s.cursorMu.Unlock()
-	if s.cursorNS == nil {
-		s.cursorNS = make(map[string]string)
-	}
-	ns := s.cursorNS[session]
-	if ns == "" {
-		var err error
-		if ns, err = codec.RandomHex(8); err != nil {
-			return ""
-		}
-		s.cursorNS[session] = ns
+	ns, ok := s.results.cursorNonce(session, func() (string, error) { return codec.RandomHex(8) })
+	if !ok {
+		return ""
 	}
 	return encodeCursor(ns, idx+1)
 }
@@ -245,10 +243,8 @@ func (s *Server) nextCursor(session string, idx, total int) string {
 // it was issued for session. It returns ok=false for a forged or malformed
 // cursor.
 func (s *Server) chunkFromCursor(session, cursor string) (int, bool) {
-	s.cursorMu.Lock()
-	defer s.cursorMu.Unlock()
-	ns := s.cursorNS[session]
-	if ns == "" {
+	ns, ok := s.results.cursorNonce(session, nil)
+	if !ok {
 		return 0, false
 	}
 	return decodeCursor(ns, cursor)
