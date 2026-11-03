@@ -1,8 +1,16 @@
 package codec
 
 import (
+	"errors"
 	"fmt"
 )
+
+// MaxName is the maximum wire length of a domain name (RFC 1035 §2.3.4).
+const MaxName = 255
+
+// ErrNameTooLong is returned when a name exceeds MaxName or a label exceeds
+// MaxLabel on the wire.
+var ErrNameTooLong = errors.New("codec: name exceeds DNS length limits")
 
 // Reserved structural labels. Tool names must not collide with these.
 const (
@@ -57,6 +65,46 @@ func BuildCallName(zone []string, tool string, args []byte, nonce string, sig st
 		return append([]string{sig}, labels...)
 	}
 	return labels
+}
+
+// NameWireLength returns the wire-format length of a name made of labels: one
+// length byte plus the label for each, and the terminating root byte.
+func NameWireLength(labels []string) int {
+	n := 1
+	for _, l := range labels {
+		n += 1 + len(l)
+	}
+	return n
+}
+
+// CheckName reports ErrNameTooLong when labels would not fit in a DNS name.
+func CheckName(labels []string) error {
+	for _, l := range labels {
+		if len(l) > MaxLabel {
+			return fmt.Errorf("%w: label of %d bytes (max %d)", ErrNameTooLong, len(l), MaxLabel)
+		}
+	}
+	if n := NameWireLength(labels); n > MaxName {
+		return fmt.Errorf("%w: %d bytes (max %d)", ErrNameTooLong, n, MaxName)
+	}
+	return nil
+}
+
+// MaxCallArgs returns the largest argument size, in bytes, for which a call
+// name with the given zone, tool, nonce and signature fits in MaxName. It
+// returns -1 when even empty arguments do not fit.
+func MaxCallArgs(zone []string, tool, nonce, sig string) int {
+	fits := func(n int) bool {
+		return CheckName(BuildCallName(zone, tool, make([]byte, n), nonce, sig)) == nil
+	}
+	if !fits(0) {
+		return -1
+	}
+	n := 0
+	for fits(n + 1) {
+		n++
+	}
+	return n
 }
 
 // ParseCallName parses a label slice produced by BuildCallName (or received from

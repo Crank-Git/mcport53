@@ -201,6 +201,13 @@ func (c *Client) Call(zone, tool string, args []byte, sig string) (*codec.Envelo
 		sig = c.signer(tool, nonce, args, time.Now().Unix())
 	}
 	labels := codec.BuildCallName(zoneLabels(zone), tool, args, nonce, sig)
+	if err := codec.CheckName(labels); err != nil {
+		// Fail before sending: an over-long name is answered FORMERR (or
+		// dropped by a resolver), which tells the caller nothing.
+		max := codec.MaxCallArgs(zoneLabels(zone), tool, nonce, sig)
+		return nil, fmt.Errorf("dns: %d bytes of arguments for %s do not fit in a DNS name (max %d for this zone and signing): %w",
+			len(args), tool, max, err)
+	}
 	return c.queryEnvelope(LabelsToName(labels), dns.TypeTXT)
 }
 
