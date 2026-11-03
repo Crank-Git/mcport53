@@ -32,6 +32,7 @@ func main() {
 		tsig     = flag.String("tsig", "", "require TSIG on every query, as name:secret (protocol §8)")
 		tlsCert  = flag.String("tls-cert", "", "serve DNS-over-TLS with this PEM certificate (with --tls-key)")
 		tlsKey   = flag.String("tls-key", "", "PEM private key for --tls-cert")
+		nsName   = flag.String("nameserver", "", "host name for the zone's NS and SOA records (default ns.<zone>); match the delegation")
 	)
 	flag.Parse()
 	if *discover == "" {
@@ -75,6 +76,9 @@ func main() {
 	handlers := server.Handlers()
 	dnsSrv := dns.NewServer(*zone, &handlers)
 	dnsSrv = dnsSrv.WithDiscovery(discoverHost, discoverPort)
+	if *nsName != "" {
+		dnsSrv = dnsSrv.WithNameserver(*nsName)
+	}
 	dnsSrv = server.ApplyTransport(dnsSrv)
 
 	stop := make(chan os.Signal, 1)

@@ -151,9 +151,10 @@ go run ./cmd/mcp53-client --tls --tls-ca cert.pem --tool echo --args '{"text":"h
 ## 7. Pointing at a real resolver
 
 The examples above talk to the server directly on `127.0.0.1:5333`. In a real
-deployment you run the server behind a public resolver and point that resolver
-(or the client's `--server`) at the authoritative zone. Advertise the resolver
-from the server so discovery points clients at the right address:
+deployment the zone is delegated to the server and clients query through an
+ordinary recursive resolver; [`DEPLOYMENT.md`](DEPLOYMENT.md) covers delegation,
+private stub zones, and what does and does not work through a resolver.
+Advertise the server's public address in discovery:
 
 ```bash
 go run ./cmd/mcp53-server --zone example. --discover dns.example.com:53
@@ -162,7 +163,7 @@ go run ./cmd/mcp53-server --zone example. --discover dns.example.com:53
 Then query through the resolver:
 
 ```bash
-go run ./cmd/mcp53-client --server 198.51.100.53 --zone example. \
+go run ./cmd/mcp53-client --server 198.51.100.53:53 --zone example. \
   --tool echo --args '{"text":"hi"}'
 ```
 
