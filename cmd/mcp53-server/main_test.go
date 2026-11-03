@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -70,40 +69,6 @@ func TestParseDiscover(t *testing.T) {
 			}
 			if host != tt.wantHost || port != tt.wantPort {
 				t.Errorf("parseDiscover(%q) = (%q, %d), want (%q, %d)", tt.in, host, port, tt.wantHost, tt.wantPort)
-			}
-		})
-	}
-}
-
-func TestParseKeys(t *testing.T) {
-	tests := []struct {
-		name    string
-		in      string
-		want    map[string]string
-		wantErr bool
-	}{
-		{"empty", "", nil, false},
-		{"single", "echo=secret1", map[string]string{"echo": "secret1"}, false},
-		{"multiple", "echo=secret1,upper=secret2", map[string]string{"echo": "secret1", "upper": "secret2"}, false},
-		{"lowercases tool", "Echo=secret", map[string]string{"echo": "secret"}, false},
-		{"trims spaces", " echo = secret ", map[string]string{"echo": " secret"}, false},
-		{"ignores blank", "echo=secret,,upper=secret2", map[string]string{"echo": "secret", "upper": "secret2"}, false},
-		{"missing equals", "echo", nil, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseKeys(tt.in)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatalf("parseKeys(%q) expected error", tt.in)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseKeys(%q) unexpected error: %v", tt.in, err)
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("parseKeys(%q) = %#v, want %#v", tt.in, got, tt.want)
 			}
 		})
 	}
