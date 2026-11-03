@@ -2,41 +2,56 @@ package auth
 
 import (
 	"container/list"
+	"errors"
 	"sync"
 	"time"
 )
 
-// DefaultReplayMaxEntries is the maximum number of (caller, nonce) pairs a
-// ReplayGuard retains before evicting the oldest.
-const DefaultReplayMaxEntries = 4096
+// DefaultReplayMaxEntries is the maximum number of nonces a ReplayGuard
+// retains. When it is full of unexpired nonces, new calls are refused rather
+// than evicting a live nonce (which would re-open it for replay).
+const DefaultReplayMaxEntries = 65536
 
-// DefaultReplayTTL is how long a (caller, nonce) pair is considered used before
-// it may be reused. It bounds how far in the past a captured call can be
-// replayed once its nonce has been evicted.
-const DefaultReplayTTL = 5 * time.Minute
+// DefaultReplayTTL is how long a nonce is remembered once used. A verifier
+// that accepts timestamps within +/- window must remember nonces for at least
+// 2 x window: a call signed at now+window stays valid until now+2*window.
+const DefaultReplayTTL = 10 * time.Minute
 
-// entry is a replay-guard record: the key it is stored under and when it
+// ErrReplay is returned when a nonce has already been used.
+var ErrReplay = errors.New("auth: replay detected")
+
+// ErrGuardFull is returned when the guard holds DefaultReplayMaxEntries (or
+// the configured maximum) unexpired nonces and cannot record another without
+// forgetting a live one.
+var ErrGuardFull = errors.New("auth: replay guard full")
+
+// entry is a replay-guard record: the nonce it is stored under and when it
 // expires.
 type entry struct {
-	key     string
+	nonce   string
 	expires time.Time
 }
 
-// ReplayGuard enforces one-time use of nonces per caller, per protocol §7.2.
-// It is safe for concurrent use. A caller is any opaque string (typically the
-// remote network address); a nonce is the per-call uncacheability nonce.
+// ReplayGuard enforces one-time use of nonces, per protocol §7.2. It is safe
+// for concurrent use.
+//
+// The guard is keyed on the nonce alone. The nonce is covered by the call
+// signature, so it identifies one signed call; keying on the source address as
+// well would let a captured call be replayed from any other address (UDP
+// sources are trivially spoofed, and behind a resolver every client shares the
+// resolver's address).
 type ReplayGuard struct {
 	max   int
 	ttl   time.Duration
 	mu    sync.Mutex
 	seen  map[string]*list.Element
-	order *list.List // front = most recently used, back = oldest
+	order *list.List // front = newest, back = oldest (entries share one TTL)
 	stop  chan struct{}
 }
 
-// NewReplayGuard builds a guard retaining at most max (caller, nonce) pairs,
-// each expiring after ttl. A background reaper removes expired entries at half
-// the TTL interval. Call Close to stop the reaper.
+// NewReplayGuard builds a guard retaining at most max nonces, each expiring
+// ttl after first use. A background reaper removes expired entries at half the
+// TTL interval. Call Close to stop the reaper.
 func NewReplayGuard(max int, ttl time.Duration) *ReplayGuard {
 	if max <= 0 {
 		max = DefaultReplayMaxEntries
@@ -64,38 +79,40 @@ func (g *ReplayGuard) Close() {
 	}
 }
 
-// Check reports whether (caller, nonce) is fresh. On a fresh pair it records
-// the pair as used (updating its expiry and recency) and returns true. If the
-// pair was already seen it returns false, signalling a replay.
-func (g *ReplayGuard) Check(caller, nonce string, now time.Time) bool {
-	key := caller + "\x00" + nonce
-
+// Check records nonce as used at now. It returns nil for a fresh nonce,
+// ErrReplay if the nonce was already used and has not expired, and
+// ErrGuardFull if the guard is at capacity with unexpired nonces.
+func (g *ReplayGuard) Check(nonce string, now time.Time) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if _, ok := g.seen[key]; ok {
-		return false
+	if el, ok := g.seen[nonce]; ok {
+		if now.After(el.Value.(entry).expires) {
+			// Expired but not yet reaped: forget it and treat as fresh.
+			g.order.Remove(el)
+			delete(g.seen, nonce)
+		} else {
+			return ErrReplay
+		}
 	}
-	elem := g.order.PushFront(entry{key: key, expires: now.Add(g.ttl)})
-	g.seen[key] = elem
-
-	// Evict the oldest entry if we have exceeded capacity.
-	if g.order.Len() > g.max {
-		oldest := g.order.Back()
-		g.order.Remove(oldest)
-		delete(g.seen, oldest.Value.(entry).key)
+	if g.order.Len() >= g.max {
+		g.evictLocked(now)
+		if g.order.Len() >= g.max {
+			return ErrGuardFull
+		}
 	}
-	return true
+	g.seen[nonce] = g.order.PushFront(entry{nonce: nonce, expires: now.Add(g.ttl)})
+	return nil
 }
 
-// evict removes entries whose expiry is at or before now. It takes the lock.
+// evict removes entries whose expiry is before now. It takes the lock.
 func (g *ReplayGuard) evict(now time.Time) {
 	g.mu.Lock()
 	g.evictLocked(now)
 	g.mu.Unlock()
 }
 
-// Len returns the number of retained pairs (for tests and observability).
+// Len returns the number of retained nonces (for tests and observability).
 func (g *ReplayGuard) Len() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -116,9 +133,9 @@ func (g *ReplayGuard) reaper() {
 	}
 }
 
-// evictLocked removes all entries whose expiry is at or before now. Callers
-// must hold g.mu. Entries are ordered oldest-first from the back, so iteration
-// stops at the first still-live entry.
+// evictLocked removes all entries whose expiry is before now. Callers must
+// hold g.mu. Entries are ordered oldest-first from the back, so iteration stops
+// at the first still-live entry.
 func (g *ReplayGuard) evictLocked(now time.Time) {
 	for e := g.order.Back(); e != nil; {
 		next := e.Prev()
@@ -127,7 +144,7 @@ func (g *ReplayGuard) evictLocked(now time.Time) {
 			break
 		}
 		g.order.Remove(e)
-		delete(g.seen, en.key)
+		delete(g.seen, en.nonce)
 		e = next
 	}
 }

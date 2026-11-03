@@ -20,10 +20,11 @@ type Server struct {
 	registry     *Registry
 	results      *ResultStore
 	verify       func(*dns.CallRequest) error
-	keys         *auth.KeyRegistry // optional per-tool HMAC keys (protocol §8)
-	discoveryKey []byte            // optional key signing discovery documents (protocol §8)
-	compress     bool              // gzip large results into a single envelope (protocol §4.4)
-	useCursor    bool              // hand out opaque pagination cursors instead of fixed indices (protocol §4.4)
+	keys         *auth.KeyRegistry            // optional per-tool HMAC keys (protocol §8)
+	keyVerify    func(*dns.CallRequest) error // verifier for keys; built once so every Handlers() shares one replay guard
+	discoveryKey []byte                       // optional key signing discovery documents (protocol §8)
+	compress     bool                         // gzip large results into a single envelope (protocol §4.4)
+	useCursor    bool                         // hand out opaque pagination cursors instead of fixed indices (protocol §4.4)
 	cursorMu     sync.Mutex
 	cursorNS     map[string]string // session -> opaque cursor nonce
 	tsigName     string            // optional TSIG key name for transport integrity (protocol §11)
@@ -50,6 +51,7 @@ func (s *Server) WithVerify(fn func(*dns.CallRequest) error) *Server {
 // replay guard rejects reused nonces.
 func (s *Server) WithKeys(reg *auth.KeyRegistry) *Server {
 	s.keys = reg
+	s.keyVerify = HMACVerifyKeys(reg)
 	return s
 }
 
@@ -122,7 +124,7 @@ func (s *Server) Handlers() dns.Handlers {
 	}
 	switch {
 	case s.keys != nil:
-		h.OnVerify = HMACVerifyKeys(s.keys)
+		h.OnVerify = s.keyVerify
 	case s.verify != nil:
 		h.OnVerify = s.verify
 	}
