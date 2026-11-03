@@ -182,6 +182,10 @@ but resolvers inconsistently handle multi-string/multi-record TXT. To stay safe:
   ```
   The client fetches `<chunk>.<session>.chunk.<zone>` for `chunk = 1..total-1`,
   concatenating the `chunk` bytes. Final chunk has `more=false`.
+  Sessions are short-lived: the server keeps them for a bounded time (default
+  5 minutes) and within bounded memory, dropping the oldest first. A chunk query
+  for an expired or dropped session returns an `error` envelope; the client
+  repeats the call.
 - If the tool is **long-running**, return `queued` with a `job` id. The server
   runs the tool in the background and stores the outcome under a `session`. The
   client polls `<job>.job.<zone>` until it gets `done` (with a `session`), then
