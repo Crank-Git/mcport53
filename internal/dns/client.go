@@ -273,9 +273,14 @@ func (c *Client) ChunkByCursor(zone, session, cursor string) (*codec.Envelope, e
 	return c.queryEnvelope(LabelsToName(labels), dns.TypeTXT)
 }
 
-// Job polls the status of a long-running call (protocol §2.4 / §4.3).
+// Job polls the status of a long-running call (protocol §2.4 / §4.3). Each poll
+// carries a fresh nonce so a resolver cannot answer it from cache.
 func (c *Client) Job(zone, job string) (*codec.Envelope, error) {
-	labels := codec.JobName(zoneLabels(zone), job)
+	nonce, err := codec.RandomNonce()
+	if err != nil {
+		return nil, err
+	}
+	labels := codec.JobPollName(zoneLabels(zone), job, nonce)
 	return c.queryEnvelope(LabelsToName(labels), dns.TypeTXT)
 }
 

@@ -99,11 +99,72 @@ func (a *Agent) Call(ctx context.Context, tool string, args []byte) (*codec.Resu
 			return a.assembleByCursor(env)
 		}
 		return a.assembleChunks(env)
+	case codec.StatusQueued:
+		return a.awaitJob(ctx, tool, env.Job)
 	case codec.StatusError:
 		return nil, fmt.Errorf("mcp: tool %s: %s", tool, env.Error)
 	default:
 		return nil, fmt.Errorf("mcp: tool %s: unexpected status %q", tool, env.Status)
 	}
+}
+
+// Job polling backoff (protocol §4.3).
+const (
+	jobPollFirst = 100 * time.Millisecond
+	jobPollMax   = time.Second
+)
+
+// awaitJob polls a queued call until it finishes, then fetches its result.
+// It stops when ctx is done.
+func (a *Agent) awaitJob(ctx context.Context, tool, job string) (*codec.ResultEnvelope, error) {
+	wait := jobPollFirst
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("mcp: tool %s: waiting for job %s: %w", tool, job, ctx.Err())
+		case <-time.After(wait):
+		}
+		env, err := a.client.Job(a.zone, job)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: tool %s: polling job %s: %w", tool, job, err)
+		}
+		switch env.Status {
+		case codec.StatusRunning, codec.StatusQueued:
+			if wait = wait * 3 / 2; wait > jobPollMax {
+				wait = jobPollMax
+			}
+		case codec.StatusDone:
+			return a.fetchSession(env)
+		case codec.StatusError:
+			return nil, fmt.Errorf("mcp: tool %s: %s", tool, env.Error)
+		default:
+			return nil, fmt.Errorf("mcp: tool %s: job %s: unexpected status %q", tool, job, env.Status)
+		}
+	}
+}
+
+// fetchSession fetches every chunk of a finished job's stored result by fixed
+// index, starting at 0, and parses it (decompressing if marked).
+func (a *Agent) fetchSession(done *codec.Envelope) (*codec.ResultEnvelope, error) {
+	if done.Total <= 0 || done.Session == "" {
+		return nil, errors.New("mcp: finished job has no result session")
+	}
+	var raw []byte
+	for i := 0; i < done.Total; i++ {
+		env, err := a.client.Chunk(a.zone, done.Session, i)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: fetching job result chunk %d: %w", i, err)
+		}
+		if env.Status != codec.StatusChunked {
+			return nil, fmt.Errorf("mcp: job result chunk %d returned status %q: %s", i, env.Status, env.Error)
+		}
+		b, err := base64.StdEncoding.DecodeString(env.Result)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: decoding job result chunk %d: %w", i, err)
+		}
+		raw = append(raw, b...)
+	}
+	return parseAssembled(done.Compression, raw)
 }
 
 // assembleChunks concatenates the chunks of a chunked result and parses the

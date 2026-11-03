@@ -99,9 +99,10 @@ the client handles chunking transparently. See
 
 ## 5. Long-running jobs
 
-Tools that return `queued` are polled via the job API. The client waits for the
-result before printing it; the server tracks the job by session. See
-[protocol §4.3](PROTOCOL.md#43-job-polling).
+A tool that is still running after 750 ms is answered `queued` and continues as
+a job. The client polls the job and prints the result when it finishes, so slow
+tools work through resolvers that would otherwise give up on a long-running
+query. See [protocol §4.3](PROTOCOL.md#43-job-polling).
 
 ## 6. Signing calls
 

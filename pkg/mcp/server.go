@@ -31,6 +31,8 @@ type Server struct {
 	tsigSecret   []byte                       // optional TSIG shared secret (protocol §8)
 	tls          *tls.Config                  // optional DoT certificate config (protocol §8)
 	callTimeout  time.Duration                // per-call tool deadline; DefaultCallTimeout when zero
+	inlineBudget time.Duration                // time before a call is answered "queued"; DefaultInlineBudget when zero
+	jobs         *jobStore                    // calls that outlived the inline budget (protocol §4.3)
 }
 
 // DefaultCallTimeout bounds how long a tool may run for one call.
@@ -38,7 +40,7 @@ const DefaultCallTimeout = 30 * time.Second
 
 // NewServer builds a Server for the given registry with a fresh result store.
 func NewServer(registry *Registry) *Server {
-	return &Server{registry: registry, results: NewResultStore()}
+	return &Server{registry: registry, results: NewResultStore(), jobs: newJobStore(0, 0)}
 }
 
 // WithCallTimeout sets the deadline for each tool call (default
@@ -140,6 +142,7 @@ func (s *Server) Handlers() dns.Handlers {
 		OnDiscovery: s.onDiscovery,
 		OnSchema:    s.onSchema,
 		OnChunk:     s.onChunk,
+		OnJob:       s.onJob,
 	}
 	switch {
 	case s.keys != nil:
@@ -151,23 +154,49 @@ func (s *Server) Handlers() dns.Handlers {
 }
 
 // onCall dispatches a tool call, chunking the result when it exceeds the TXT
-// target size (protocol §4.2).
+// target size (protocol §4.2). A call still running after the inline budget
+// is answered "queued" with a job id and continues in the background
+// (protocol §4.3).
 func (s *Server) onCall(req *dns.CallRequest) *codec.Envelope {
 	tool, ok := s.registry.Tool(req.Tool)
 	if !ok {
 		return codec.Error(req.Tool, "mcp: unknown tool")
 	}
-	env, err := s.runTool(tool, req.Args)
+	result := make(chan *codec.Envelope, 1)
+	go func() { result <- s.completeCall(req.Tool, tool, req.Args) }()
+
+	budget := s.inlineBudget
+	if budget <= 0 {
+		budget = DefaultInlineBudget
+	}
+	timer := time.NewTimer(budget)
+	defer timer.Stop()
+	select {
+	case e := <-result:
+		return e
+	case <-timer.C:
+	}
+	id, err := s.jobs.start(req.Tool, result)
 	if err != nil {
-		return codec.Error(req.Tool, err.Error())
+		// No room for another job: answer when the call finishes.
+		return <-result
+	}
+	return codec.Queued(req.Tool, id)
+}
+
+// completeCall runs tool and turns its outcome into the call's answer.
+func (s *Server) completeCall(name string, tool *Tool, args []byte) *codec.Envelope {
+	env, err := s.runTool(tool, args)
+	if err != nil {
+		return codec.Error(name, err.Error())
 	}
 	if env == nil {
-		return codec.Error(req.Tool, "mcp: tool returned a nil envelope")
+		return codec.Error(name, "mcp: tool returned a nil envelope")
 	}
 	if env.Status != codec.StatusOK {
 		return env
 	}
-	return s.chunkIfNeeded(req.Tool, []byte(env.Result), env.Ms)
+	return s.chunkIfNeeded(name, []byte(env.Result), env.Ms)
 }
 
 // errToolTimeout is returned when a tool exceeds the call timeout.

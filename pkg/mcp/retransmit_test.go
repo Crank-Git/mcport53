@@ -40,7 +40,9 @@ func TestRetransmittedCallRunsOnce(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			var runs atomic.Int64
-			srv := NewServer(slowRegistry(t, 1500*time.Millisecond, &runs))
+			// A long inline budget keeps the call on the call query itself (no job),
+			// so the resolver retransmits it while the tool runs.
+			srv := NewServer(slowRegistry(t, 1500*time.Millisecond, &runs)).WithInlineBudget(5 * time.Second)
 			keys := auth.NewKeyRegistry([]byte("retransmit-key"))
 			if signed {
 				srv = srv.WithKeys(keys)
