@@ -277,13 +277,13 @@ func TestChunkPayload(t *testing.T) {
 	if got := ChunkPayload(nil, 4); got != nil {
 		t.Fatalf("empty payload should yield no chunks, got %v", got)
 	}
-	// A non-positive size falls back to the default ChunkSize (100).
-	long := bytes.Repeat([]byte("a"), 250)
+	// A non-positive size falls back to the default ChunkSize.
+	long := bytes.Repeat([]byte("a"), 2*ChunkSize+10)
 	if got := ChunkPayload(long, 0); len(got) != 3 {
-		t.Fatalf("ChunkPayload(long, 0) = %d chunks, want 3 (default size 100)", len(got))
+		t.Fatalf("ChunkPayload(long, 0) = %d chunks, want 3 (default ChunkSize)", len(got))
 	}
 	if got := ChunkPayload(long, -1); len(got) != 3 {
-		t.Fatalf("ChunkPayload(long, -1) = %d chunks, want 3 (default size 100)", len(got))
+		t.Fatalf("ChunkPayload(long, -1) = %d chunks, want 3 (default ChunkSize)", len(got))
 	}
 }
 

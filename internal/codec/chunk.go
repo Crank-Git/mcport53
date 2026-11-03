@@ -1,9 +1,12 @@
 package codec
 
 // ChunkSize is the default maximum size (bytes) of each result chunk payload.
-// The base64 encoding plus envelope overhead is added on top, so keep this
-// comfortably below MaxEnvelopeTXT.
-const ChunkSize = 100
+//
+// It is sized so a chunked envelope (base64 payload, a 26-character session,
+// a tool name of up to 63 characters, cursor and compression markers) marshals
+// within MaxEnvelopeTXT, and so the whole response fits a 1232-byte EDNS0 UDP
+// message with room for a 255-byte question name and a TSIG record.
+const ChunkSize = 240
 
 // ChunkPayload splits data into consecutive pieces of at most size bytes.
 // An empty input yields no chunks.

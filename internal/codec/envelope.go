@@ -6,10 +6,12 @@ import (
 	"fmt"
 )
 
-// MaxEnvelopeTXT is the target maximum size (bytes) for a single TXT record
-// holding an envelope. Kept below the 255-byte TXT character-string limit with
-// headroom so most resolvers return it intact.
-const MaxEnvelopeTXT = 200
+// MaxEnvelopeTXT is the largest marshaled envelope (bytes of JSON) a server
+// sends in one response. On the wire the JSON is base64-encoded (4/3) and
+// split across TXT character-strings, so 600 bytes of JSON plus a 255-byte
+// question name, the DNS header, EDNS0 OPT and a TSIG record stay within a
+// 1232-byte EDNS0 UDP message (DNS Flag Day 2020).
+const MaxEnvelopeTXT = 600
 
 // Status is the outcome of a call as carried in an Envelope.
 type Status string

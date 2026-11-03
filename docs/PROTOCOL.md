@@ -171,10 +171,13 @@ Results are returned in a **TXT** record. The TXT carries a single JSON **envelo
 
 ### 4.2 TXT size limit & chunking
 
-A single TXT character-string is ≤255 bytes and a DNS message may carry several,
-but resolvers inconsistently handle multi-string/multi-record TXT. To stay safe:
+Every response must fit a 1232-byte EDNS0 UDP message (DNS Flag Day 2020), with
+room for a question name of up to 255 bytes and a TSIG record. The envelope JSON is
+base64-encoded on the wire and split across ≤255-byte TXT character-strings, so the
+server bounds the marshaled envelope at **600 bytes** and result chunks at **240
+bytes** of payload:
 
-- If the envelope fits in **≤ 200 bytes**, return it directly in one TXT record.
+- If the marshaled envelope fits in **≤ 600 bytes**, return it directly.
 - If it is larger **but complete**, return `chunked`:
   ```json
   {"v":1,"status":"chunked","session":"s1","chunk":0,"total":3,"more":true,
@@ -217,8 +220,14 @@ encoded blob instead of the plain serialized tool result:
 The `compression` marker (`gzip` is the only value in this implementation; `zstd`
 is reserved for a future standard-library-free build) tells the client to
 decompress `result` before parsing it. Compression wraps the *inner* serialized
-tool result, so the `kind`/`mime`/`value` structure inside is preserved. The
-server applies it automatically when it would otherwise exceed the TXT size limit.
+tool result, so the `kind`/`mime`/`value` structure inside is preserved.
+
+When enabled, the server compresses a result that does not fit one envelope
+*before* chunking it, and keeps the compressed form only if it is smaller. If the
+compressed result fits one envelope it is returned as `ok` as above; otherwise
+the compressed bytes are chunked (§4.2) and the **first** `chunked` envelope
+carries `"compression":"gzip"`. The client assembles the chunks, then
+decompresses.
 
 #### Cursor pagination
 
