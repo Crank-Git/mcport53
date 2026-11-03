@@ -16,6 +16,25 @@ reach tools in places where HTTP, websockets, or raw TCP cannot.
 - **Large/long results:** chunked sessions + job polling
 - **Auth:** optional HMAC signature + nonce (replay protection)
 
+## Install
+
+Prebuilt `mcp53-server` and `mcp53-client` binaries for Linux, macOS and Windows
+(amd64 and arm64) are attached to each
+[release](https://github.com/Crank-Git/mcport53/releases), with a `SHA256SUMS`
+file:
+
+```bash
+curl -LO https://github.com/Crank-Git/mcport53/releases/download/v0.1.0/mcport53_v0.1.0_linux_amd64.tar.gz
+tar -xzf mcport53_v0.1.0_linux_amd64.tar.gz
+```
+
+Or build from source with Go:
+
+```bash
+go install github.com/Crank-Git/mcport53/cmd/mcp53-server@latest
+go install github.com/Crank-Git/mcport53/cmd/mcp53-client@latest
+```
+
 ## Quick start
 
 ```bash
