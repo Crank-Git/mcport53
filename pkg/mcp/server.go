@@ -208,41 +208,48 @@ func (s *Server) runTool(tool *Tool, args []byte) (*codec.Envelope, error) {
 	}
 }
 
-// chunkIfNeeded returns the envelope as-is when it fits in one TXT record,
-// otherwise it stores the assembled result and returns a chunked envelope.
+// chunkIfNeeded returns the result in a single envelope when it fits
+// (codec.MaxEnvelopeTXT, measured on the marshaled envelope), otherwise it
+// stores the payload and returns the first chunked envelope.
 //
-// When compression is enabled and a large result gzip-shrinks into a single
-// TXT-sized envelope (protocol §4.4), that compressed envelope is returned
-// instead of fixed chunks.
+// When compression is enabled the payload is gzipped first (if that makes it
+// smaller), and it is the compressed bytes that are sent whole or chunked
+// (protocol §4.4). A chunked result carries the compression marker on its
+// first envelope; the client decompresses after assembly.
 func (s *Server) chunkIfNeeded(tool string, data []byte, ms int) *codec.Envelope {
-	if len(data) <= codec.MaxEnvelopeTXT {
-		e := codec.NewEnvelope(codec.StatusOK)
-		e.Tool = tool
-		e.Result = string(data)
-		e.Ms = ms
+	single := func(result, compression string) *codec.Envelope {
+		e := codec.OK(tool, result, ms)
+		e.Compression = compression
+		if b, err := e.Marshal(); err == nil && len(b) <= codec.MaxEnvelopeTXT {
+			return e
+		}
+		return nil
+	}
+	if e := single(string(data), ""); e != nil {
 		return e
 	}
+
+	payload, compression := data, ""
 	if s.compress {
-		if enc, err := codec.CompressResult(codec.CompressionGzip, data); err == nil {
-			e := codec.NewEnvelope(codec.StatusOK)
-			e.Tool = tool
-			e.Result = enc
-			e.Compression = string(codec.CompressionGzip)
-			e.Ms = ms
-			if b, err := e.Marshal(); err == nil && len(b) <= codec.MaxEnvelopeTXT {
-				return e
+		if c, err := codec.CompressorFor(codec.CompressionGzip); err == nil {
+			if z, err := c.Compress(data); err == nil && len(z) < len(data) {
+				payload, compression = z, string(codec.CompressionGzip)
+				if e := single(base64.StdEncoding.EncodeToString(z), compression); e != nil {
+					return e
+				}
 			}
 		}
 	}
-	session, err := s.results.Put(data)
+
+	session, err := s.results.Put(payload)
 	if err != nil {
 		return codec.Error(tool, err.Error())
 	}
-	pieces := codec.ChunkPayload(data, codec.ChunkSize)
+	pieces := codec.ChunkPayload(payload, codec.ChunkSize)
 	total := len(pieces)
-	encoded := base64.StdEncoding.EncodeToString(pieces[0])
-	e := codec.Chunked(tool, session, 0, total, true, encoded)
+	e := codec.Chunked(tool, session, 0, total, total > 1, base64.StdEncoding.EncodeToString(pieces[0]))
 	e.Ms = ms
+	e.Compression = compression
 	// Flag cursor mode on the chunk-0 envelope so the client follows cursors
 	// rather than fixed indices (protocol §4.4).
 	if s.useCursor {

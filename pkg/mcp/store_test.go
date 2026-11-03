@@ -46,7 +46,7 @@ func TestStorePutGetSingle(t *testing.T) {
 
 func TestStorePutGetMulti(t *testing.T) {
 	s := NewResultStore()
-	data := bytes.Repeat([]byte("x"), 250) // 3 chunks of codec.ChunkSize
+	data := bytes.Repeat([]byte("x"), 2*codec.ChunkSize+10) // 3 chunks
 	session := mustPut(t, s, data)
 
 	var assembled bytes.Buffer
@@ -227,7 +227,7 @@ func TestStoreConcurrent(t *testing.T) {
 func TestServerStoreStaysBounded(t *testing.T) {
 	r := NewRegistry()
 	_ = r.Register(&Tool{Name: "big", Call: func(ctx context.Context, a []byte) (*codec.Envelope, error) {
-		return codec.OK("big", strings.Repeat("x", 300), 0), nil
+		return codec.OK("big", strings.Repeat("x", codec.MaxEnvelopeTXT+100), 0), nil
 	}})
 	store := NewResultStoreWithLimits(ResultLimits{MaxSessions: 128})
 	h := NewServer(r).WithResultStore(store).Handlers()

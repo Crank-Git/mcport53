@@ -137,6 +137,21 @@ func (a *Agent) assembleChunks(first *codec.Envelope) (*codec.ResultEnvelope, er
 		}
 		raw = append(raw, b...)
 	}
+	return parseAssembled(first.Compression, raw)
+}
+
+// parseAssembled decompresses an assembled chunked payload when the first
+// envelope marked it compressed (protocol §4.4), then parses the result.
+func parseAssembled(compression string, raw []byte) (*codec.ResultEnvelope, error) {
+	if compression != "" {
+		c, err := codec.CompressorFor(codec.CompressionKind(compression))
+		if err != nil {
+			return nil, fmt.Errorf("mcp: chunked result: %w", err)
+		}
+		if raw, err = c.Decompress(raw); err != nil {
+			return nil, fmt.Errorf("mcp: chunked result: %w", err)
+		}
+	}
 	return codec.ParseResultEnvelope(string(raw))
 }
 
@@ -148,6 +163,7 @@ func (a *Agent) assembleByCursor(first *codec.Envelope) (*codec.ResultEnvelope, 
 	var raw []byte
 	session := first.Session
 	cursor := first.Cursor
+	compression := first.Compression
 	for {
 		if first.Result != "" {
 			b, err := base64.StdEncoding.DecodeString(first.Result)
@@ -169,5 +185,5 @@ func (a *Agent) assembleByCursor(first *codec.Envelope) (*codec.ResultEnvelope, 
 		first = next
 		cursor = next.Cursor
 	}
-	return codec.ParseResultEnvelope(string(raw))
+	return parseAssembled(compression, raw)
 }
