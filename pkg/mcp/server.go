@@ -6,6 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
 
 	"github.com/Crank-Git/mcport53/internal/auth"
 	"github.com/Crank-Git/mcport53/internal/codec"
@@ -27,11 +30,23 @@ type Server struct {
 	tsigName     string                       // optional TSIG key name for transport integrity (protocol §11)
 	tsigSecret   []byte                       // optional TSIG shared secret (protocol §11)
 	tls          *tls.Config                  // optional DoT certificate config (protocol §11)
+	callTimeout  time.Duration                // per-call tool deadline; DefaultCallTimeout when zero
 }
+
+// DefaultCallTimeout bounds how long a tool may run for one call.
+const DefaultCallTimeout = 30 * time.Second
 
 // NewServer builds a Server for the given registry with a fresh result store.
 func NewServer(registry *Registry) *Server {
 	return &Server{registry: registry, results: NewResultStore()}
+}
+
+// WithCallTimeout sets the deadline for each tool call (default
+// DefaultCallTimeout). The tool's context is cancelled at the deadline and the
+// call returns an error envelope.
+func (s *Server) WithCallTimeout(d time.Duration) *Server {
+	s.callTimeout = d
+	return s
 }
 
 // WithResultStore replaces the store that holds large results while clients
@@ -142,7 +157,7 @@ func (s *Server) onCall(req *dns.CallRequest) *codec.Envelope {
 	if !ok {
 		return codec.Error(req.Tool, "mcp: unknown tool")
 	}
-	env, err := tool.Call(context.Background(), req.Args)
+	env, err := s.runTool(tool, req.Args)
 	if err != nil {
 		return codec.Error(req.Tool, err.Error())
 	}
@@ -153,6 +168,44 @@ func (s *Server) onCall(req *dns.CallRequest) *codec.Envelope {
 		return env
 	}
 	return s.chunkIfNeeded(req.Tool, []byte(env.Result), env.Ms)
+}
+
+// errToolTimeout is returned when a tool exceeds the call timeout.
+var errToolTimeout = errors.New("mcp: tool timed out")
+
+// runTool runs tool under the call timeout. The tool runs on its own goroutine
+// so the DNS handler can answer at the deadline even if the tool ignores its
+// context; a panic in the tool is recovered there and reported as an error,
+// since the DNS server's recover does not cover other goroutines.
+func (s *Server) runTool(tool *Tool, args []byte) (*codec.Envelope, error) {
+	d := s.callTimeout
+	if d <= 0 {
+		d = DefaultCallTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	defer cancel()
+
+	type outcome struct {
+		env *codec.Envelope
+		err error
+	}
+	done := make(chan outcome, 1) // buffered: a late tool must not block forever
+	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				done <- outcome{err: fmt.Errorf("mcp: tool %s panicked: %v", tool.Name, v)}
+			}
+		}()
+		env, err := tool.Call(ctx, args)
+		done <- outcome{env, err}
+	}()
+
+	select {
+	case o := <-done:
+		return o.env, o.err
+	case <-ctx.Done():
+		return nil, errToolTimeout
+	}
 }
 
 // chunkIfNeeded returns the envelope as-is when it fits in one TXT record,
