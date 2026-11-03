@@ -284,12 +284,19 @@ and replay.
 
 ### 7.1 Signature
 
-`sig = HMAC_SHA256(secret, tool || "\x00" || argBytes || "\x00" || nonce || "\x00" || ts)`
+```
+mac   = HMAC_SHA256(secret, tool || "\x00" || argBytes || "\x00" || nonce || "\x00" || ts)
+label = base32( ts as 5-byte big-endian || mac[0:16] )
+```
 
 - `secret` — shared key pre-provisioned on client and server.
-- `ts` — Unix seconds (bounds the replay window).
-- `sig` is base32-encoded (32 bytes → 53 chars, fits in one ≤63 label) and placed
-  as the **leftmost** label of the call name (§2.3).
+- `ts` — Unix seconds, written in decimal inside the MAC input. It bounds the
+  replay window: the server accepts `|now - ts| <= window` (default 5 minutes).
+- The label carries the timestamp, so the server verifies with **one** HMAC and
+  rejects a stale timestamp before computing any. The MAC is truncated to 128 bits
+  (RFC 2104 allows truncation to at least half the hash output).
+- 21 bytes encode to a **34-character** label, placed as the **leftmost** label of
+  the call name (§2.3).
 
 ### 7.2 Replay protection
 

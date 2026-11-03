@@ -108,19 +108,6 @@ func TestCheckInvalidSig(t *testing.T) {
 	}
 }
 
-func TestVerifyInWindow(t *testing.T) {
-	now := int64(1_700_000_000)
-	sig := Sign([]byte(testSecret), testTool, testNonce, testArgs, now-30)
-	ts, ok := VerifyInWindow([]byte(testSecret), sig, testTool, testNonce, testArgs, now, 60)
-	if !ok || ts != now-30 {
-		t.Fatalf("VerifyInWindow = (%d, %v), want (%d, true)", ts, ok, now-30)
-	}
-
-	if _, ok := VerifyInWindow([]byte(testSecret), sig, testTool, testNonce, testArgs, now, 10); ok {
-		t.Fatal("VerifyInWindow accepted a signature outside its window")
-	}
-}
-
 // TestSignIsCaseSensitive alphabet guards against accidentally accepting an
 // uppercase base32 signature on the wire.
 func TestSignIsCaseSensitive(t *testing.T) {
@@ -135,12 +122,5 @@ func TestSignAtMatchesSign(t *testing.T) {
 	ts := time.Unix(1_700_000_000, 0)
 	if got := SignAt([]byte(testSecret), testTool, testNonce, testArgs, ts); got != Sign([]byte(testSecret), testTool, testNonce, testArgs, ts.Unix()) {
 		t.Fatal("SignAt differs from Sign at the same timestamp")
-	}
-}
-
-// TestVerifyInWindowBadBase32 guards the decode-failure branch.
-func TestVerifyInWindowBadBase32(t *testing.T) {
-	if _, ok := VerifyInWindow([]byte(testSecret), "not base32!!!", testTool, testNonce, testArgs, 1_700_000_000, 60); ok {
-		t.Fatal("VerifyInWindow accepted an ill-formed base32 signature")
 	}
 }

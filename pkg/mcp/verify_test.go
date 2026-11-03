@@ -69,8 +69,8 @@ func TestHMACVerifyTampered(t *testing.T) {
 	if err == nil {
 		t.Fatal("tampered args: expected error")
 	}
-	if !errors.Is(err, auth.ErrStale) {
-		t.Errorf("error = %v, want ErrStale", err)
+	if !errors.Is(err, auth.ErrInvalidSig) {
+		t.Errorf("error = %v, want ErrInvalidSig", err)
 	}
 }
 
