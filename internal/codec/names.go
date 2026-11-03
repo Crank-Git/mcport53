@@ -120,8 +120,9 @@ func ChunkName(zone []string, session string, chunk int) []string {
 
 // ParseChunkName parses a result-chunk query name.
 func ParseChunkName(labels []string) (chunk int, session string, zone []string, err error) {
+	// Two labels must precede "chunk": the index and the session.
 	i := indexOf(labels, LabelChunk)
-	if i < 1 {
+	if i < 2 {
 		return 0, "", nil, fmt.Errorf("codec: malformed chunk name %v", labels)
 	}
 	if chunk, err = parseIndex(labels[i-2]); err != nil {
