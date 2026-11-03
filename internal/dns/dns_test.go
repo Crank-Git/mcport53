@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +21,16 @@ const testZone = "example."
 // testHandlers builds a Handlers that simulates echo/boom/slow/big tools plus
 // chunk and job protocols, capturing the last call request.
 type testHarness struct {
+	mu       sync.Mutex
 	lastCall *CallRequest
+}
+
+// last returns the most recent call request seen by the server. The server
+// handler runs on its own goroutine, so access is guarded by mu.
+func (h *testHarness) last() *CallRequest {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.lastCall
 }
 
 func newTestServer(t *testing.T) (*Client, *testHarness) {
@@ -37,7 +47,9 @@ func newTestServer(t *testing.T) (*Client, *testHarness) {
 			}
 		},
 		OnCall: func(req *CallRequest) *codec.Envelope {
+			h.mu.Lock()
 			h.lastCall = req
+			h.mu.Unlock()
 			switch req.Tool {
 			case "boom":
 				return codec.Error("boom", "kaboom")
@@ -288,8 +300,8 @@ func TestCallSignatureRoundTrip(t *testing.T) {
 	if _, err := c.Call(testZone, "echo", []byte(`{}`), "deadbeef"); err != nil {
 		t.Fatalf("call: %v", err)
 	}
-	if h.lastCall.Sig != "deadbeef" {
-		t.Fatalf("server saw sig = %q, want deadbeef", h.lastCall.Sig)
+	if got := h.last(); got == nil || got.Sig != "deadbeef" {
+		t.Fatalf("server saw call %+v, want sig deadbeef", got)
 	}
 }
 

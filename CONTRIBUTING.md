@@ -16,8 +16,9 @@
    ```
 2. Implement + test locally:
    ```bash
-   go test ./...
+   go test -race ./...
    go vet ./...
+   go mod tidy -diff
    gofmt -w ./...
    ```
 3. Commit (conventional style) and push:
@@ -41,4 +42,5 @@
 
 ## CI
 
-GitHub Actions runs `go build`, `go vet`, and `go test` on every PR into `dev`.
+GitHub Actions runs `go build`, `go vet`, `gofmt`, `go mod tidy -diff`, and
+`go test -race` on every PR into `dev`.

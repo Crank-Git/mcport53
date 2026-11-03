@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/Crank-Git/mcport53/internal/codec"
-	"github.com/Crank-Git/mcport53/internal/dns"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -198,22 +197,4 @@ func toolText(res *mcp.CallToolResult) string {
 		return "mcp: tool error"
 	}
 	return strings.Join(parts, " ")
-}
-
-// callHandler adapts a Registry into a dns OnCall handler.
-func (r *Registry) callHandler() func(req *dns.CallRequest) *codec.Envelope {
-	return func(req *dns.CallRequest) *codec.Envelope {
-		tool, ok := r.Tool(req.Tool)
-		if !ok {
-			return codec.Error(req.Tool, "mcp: unknown tool")
-		}
-		env, err := tool.Call(context.Background(), req.Args)
-		if err != nil {
-			return codec.Error(req.Tool, err.Error())
-		}
-		if env == nil {
-			return codec.Error(req.Tool, "mcp: tool returned a nil envelope")
-		}
-		return env
-	}
 }
