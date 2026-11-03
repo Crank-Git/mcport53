@@ -188,14 +188,16 @@ func TestToolText(t *testing.T) {
 	}
 }
 
-func TestCallHandler(t *testing.T) {
+// TestServerOnCallOutcomes covers the outcomes of the production call path
+// (Server.Handlers().OnCall): ok, unknown tool, nil envelope, and Go error.
+func TestServerOnCallOutcomes(t *testing.T) {
 	r := NewRegistry()
 	if err := r.AddMCPTool(&sdkmcp.Tool{Name: "echo"}, func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
 		return textResult("hi"), nil
 	}); err != nil {
 		t.Fatalf("AddMCPTool: %v", err)
 	}
-	h := r.callHandler()
+	h := NewServer(r).Handlers().OnCall
 	env := h(&dns.CallRequest{Tool: "echo", Args: []byte(`{}`)})
 	if env.Status != codec.StatusOK {
 		t.Fatalf("status = %q, want ok (%+v)", env.Status, env)
@@ -213,7 +215,7 @@ func TestCallHandler(t *testing.T) {
 			return nil, nil
 		},
 	})
-	env = r2.callHandler()(&dns.CallRequest{Tool: "nil"})
+	env = oncall(r2)(&dns.CallRequest{Tool: "nil"})
 	if env.Status != codec.StatusError {
 		t.Fatalf("nil envelope status = %q, want error", env.Status)
 	}
@@ -225,8 +227,12 @@ func TestCallHandler(t *testing.T) {
 			return nil, errors.New("kaboom")
 		},
 	})
-	env = r3.callHandler()(&dns.CallRequest{Tool: "boom"})
+	env = oncall(r3)(&dns.CallRequest{Tool: "boom"})
 	if env.Status != codec.StatusError || !strings.Contains(env.Error, "kaboom") {
 		t.Fatalf("go-error envelope = %+v, want error mentioning kaboom", env)
 	}
+}
+
+func oncall(r *Registry) func(*dns.CallRequest) *codec.Envelope {
+	return NewServer(r).Handlers().OnCall
 }

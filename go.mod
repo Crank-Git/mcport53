@@ -2,11 +2,13 @@ module github.com/Crank-Git/mcport53
 
 go 1.27
 
-require github.com/miekg/dns v1.1.62
+require (
+	github.com/miekg/dns v1.1.62
+	github.com/modelcontextprotocol/go-sdk v1.8.0
+)
 
 require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/modelcontextprotocol/go-sdk v1.8.0 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect

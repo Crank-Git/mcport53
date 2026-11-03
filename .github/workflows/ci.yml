@@ -38,6 +38,10 @@ jobs:
         if: steps.src.outputs.go_files != '0'
         run: test -z "$(gofmt -l $(git ls-files '*.go'))"
 
+      - name: Tidy
+        if: steps.src.outputs.go_files != '0'
+        run: go mod tidy -diff
+
       - name: Test
         if: steps.src.outputs.go_files != '0'
-        run: go test ./...
+        run: go test -race ./...
