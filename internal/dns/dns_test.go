@@ -3,7 +3,6 @@ package dns
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"net"
 	"strings"
 	"sync"
@@ -433,10 +432,7 @@ func authServer(t *testing.T, secret []byte) *Client {
 			if err := auth.Check(secret, req.Sig, req.Tool, req.Nonce, req.Args, time.Now(), time.Minute); err != nil {
 				return err
 			}
-			if !guard.Check(req.Caller, req.Nonce, time.Now()) {
-				return errors.New("auth: replay detected")
-			}
-			return nil
+			return guard.Check(req.Nonce, time.Now())
 		},
 	}
 	c := startTestServer(t, handlers)

@@ -38,8 +38,9 @@ type CallRequest struct {
 	Nonce string
 	Sig   string
 	Zone  string
-	// Caller identifies the query origin (the remote network address), used by
-	// OnVerify for per-caller replay protection (protocol §7.2).
+	// Caller is the query's source address, for logging and policy. It is not
+	// an identity: UDP sources can be spoofed and resolvers share one address,
+	// so replay protection keys on the signed nonce, not the caller.
 	Caller string
 }
 

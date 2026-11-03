@@ -289,9 +289,20 @@ and replay.
 
 ### 7.2 Replay protection
 
-The server keeps a short-lived set of used `(caller, nonce)` pairs (TTL ~5 min,
-LRU-bounded). A reused nonce is rejected. Combined with the timestamp window, this
-prevents replay. Nonces also defeat caching (§6) because every name is unique.
+The server remembers every nonce whose call signature verified, and rejects a
+nonce it has already seen. Replay protection keys on the **nonce alone**: the nonce
+is covered by the signature, whereas the source address is not an identity (UDP
+sources can be spoofed, and behind a recursive resolver every client shares the
+resolver's address).
+
+- A nonce is remembered for at least **2 × window**. Timestamps are accepted within
+  ±window of the server clock, so a call signed at `now + window` stays valid until
+  `now + 2 × window`.
+- The set is bounded. When it is full of unexpired nonces the server refuses new
+  calls rather than forgetting a live nonce, which would re-open it for replay.
+- Forged or malformed calls never consume a nonce: the signature is checked first.
+
+Nonces also defeat caching (§6) because every name is unique.
 
 ### 7.3 Auth model
 
