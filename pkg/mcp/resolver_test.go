@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -179,5 +180,47 @@ func throughResolver(t *testing.T, opt testresolver.Options) {
 				t.Fatal("result through the resolver differs from the direct result")
 			}
 		})
+	}
+}
+
+// TestLargeDiscoveryThroughResolver: a discovery document larger than a
+// 1232-byte UDP answer makes Unbound retry over TCP to the server.
+func TestLargeDiscoveryThroughResolver(t *testing.T) {
+	r := NewRegistry()
+	for i := 0; i < 20; i++ {
+		_ = r.Register(&Tool{
+			Name:        fmt.Sprintf("tool%02d", i),
+			Description: "a tool with a description long enough to make the discovery document large",
+			InputSchema: []byte(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`),
+			Call:        func(context.Context, []byte) (*codec.Envelope, error) { return codec.OK("t", "{}", 0), nil },
+		})
+	}
+	a := viaResolver(t, NewServer(r), testresolver.Options{CapsForID: true})
+	doc, err := a.Discovery()
+	if err != nil || len(doc.Tools) != 20 {
+		t.Fatalf("discovery of 20 tools through the resolver: %d tools, %v", len(doc.Tools), err)
+	}
+	b, _ := json.Marshal(doc)
+	if len(b) < 2000 {
+		t.Fatalf("fixture too small to need TCP: %d bytes", len(b))
+	}
+}
+
+// TestTSIGDoesNotSurviveAResolver documents a limitation: TSIG authenticates
+// one hop. A recursive resolver does not forward the client's TSIG record,
+// so a server that requires TSIG rejects calls that arrive through one. Use
+// HMAC call signing (§7), which is end to end, on the resolver path.
+func TestTSIGDoesNotSurviveAResolver(t *testing.T) {
+	srv := NewServer(resolverRegistry(t)).WithTSIG("mcport53.", []byte("tsig-secret"))
+	upstream := serveFull(t, srv, agentZone)
+	resolver := testresolver.Start(t, upstream, agentZone, testresolver.Options{})
+	a := NewAgent(resolver, agentZone)
+	a.SetTimeout(3 * time.Second)
+	_, err := a.Call(context.Background(), "echo", []byte(`{}`))
+	if err == nil {
+		t.Fatal("a TSIG-only server accepted a call relayed by a resolver")
+	}
+	if !strings.Contains(err.Error(), "not signed with the required TSIG key") {
+		t.Fatalf("err = %v, want the server to see the relayed query unsigned", err)
 	}
 }

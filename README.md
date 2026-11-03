@@ -9,6 +9,7 @@ Because outbound DNS (UDP/TCP **port 53**) is almost always permitted, you can
 reach tools in places where HTTP, websockets, or raw TCP cannot.
 
 - **Protocol spec:** [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
+- **Deploying behind real resolvers:** [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
 - **Encoding:** DNS-safe base32 labels, chunked to DNS limits
 - **Discovery:** SRV + TXT listing tools and schemas
 - **Calls:** `<args>.<tool>.call.<zone>` -> TXT result
@@ -28,8 +29,10 @@ go run ./cmd/mcp53-client --server 127.0.0.1:5333 --zone example.
 go run ./cmd/mcp53-client --server 127.0.0.1:5333 --zone example. --tool echo --args '{"text":"hi"}'
 ```
 
-See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the full protocol and
-[`docs/EXAMPLES.md`](docs/EXAMPLES.md) for end-to-end walkthroughs.
+See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the full protocol,
+[`docs/EXAMPLES.md`](docs/EXAMPLES.md) for end-to-end walkthroughs, and
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for delegating a zone and what works
+through a recursive resolver.
 
 ## Branch model
 

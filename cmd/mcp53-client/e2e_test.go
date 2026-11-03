@@ -216,3 +216,26 @@ func writeCert(t *testing.T, dir string) (certFile, keyFile string) {
 	_ = os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kb}), 0o600)
 	return certFile, keyFile
 }
+
+// TestE2ENameserverFlag: --nameserver sets the zone's NS and SOA name.
+func TestE2ENameserverFlag(t *testing.T) {
+	addr := startServer(t, nil, "--nameserver", "ns1.mcp.example.net")
+	for _, qt := range []uint16{dns.TypeNS, dns.TypeSOA} {
+		m := new(dns.Msg)
+		m.SetQuestion("example.", qt)
+		resp, _, err := (&dns.Client{Net: "tcp"}).Exchange(m, addr)
+		if err != nil || len(resp.Answer) != 1 {
+			t.Fatalf("%s: %v %v", dns.TypeToString[qt], resp, err)
+		}
+		var got string
+		switch rr := resp.Answer[0].(type) {
+		case *dns.NS:
+			got = rr.Ns
+		case *dns.SOA:
+			got = rr.Ns
+		}
+		if got != "ns1.mcp.example.net." {
+			t.Fatalf("%s names %q", dns.TypeToString[qt], got)
+		}
+	}
+}
