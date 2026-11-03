@@ -328,6 +328,27 @@ prevents replay. Nonces also defeat caching (§6) because every name is unique.
   server, and the client receives an encrypted, egress-friendly response. The
   `--server` UDP/TCP address is still used when `--doh` is not set.
 
+**Transport-layer integrity (TLS / TSIG).** The base protocol applies HMAC at the
+application layer (§7). For defense in depth, the transport can additionally be
+protected:
+
+- **DNS-over-TLS (RFC 8483).** Serve over `tcp-tls` instead of UDP. The client
+  switches to the `tcp-tls` net via `Client.WithTLS(&tls.Config{})` (or the
+  `pkg/mcp` server's `WithTLS` + `ApplyTransport`); pair with
+  `WithInsecureSkipVerify` for self-signed certificates. This gives
+  confidentiality and server authentication.
+- **TSIG (RFC 2845).** Sign every query with a shared HMAC-SHA256 secret. The
+  server verifies each query's signature *before* any handler runs (an unsigned
+  or wrong-secret query is rejected) and signs its responses with the same key, so
+  the client can confirm the answer's origin and integrity. Configure the server
+  with `Server.WithTSIG(name, secret)` (or `WithTSIGKeys` for multiple keys) and
+  the client with `Client.WithTSIG(name, secret)`. TSIG complements — does not
+  replace — the application HMAC of §7.
+
+Both are optional and independent; either or both may be enabled. See `pkg/mcp`
+`Server.WithTSIG`/`WithTLS`/`ApplyTransport` and `internal/dns` `Client.WithTSIG`
+`/WithTLS`/`WithInsecureSkipVerify`.
+
 ---
 
 ## 9. Worked example
@@ -359,8 +380,8 @@ until `done`/`session=s2`, then fetches the session result.
 - **Secret distribution & identity.** Move beyond shared secret: per-tool keys,
   delegated discovery with auth (e.g. signed discovery documents).
 - **Compression.** zstd/gzip inside `result` for very large payloads.
-- **Pagination cursor** vs. fixed chunk indices for streaming results.
-- **TLS/TSIG** for transport-layer integrity as a complement to application HMAC.
+- **Pagination cursor** vs. fixed chunk indices for streaming results. Cursors are
+  now implemented (see §4.4); fixed indices remain supported.
 
 ---
 

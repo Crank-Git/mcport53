@@ -79,12 +79,20 @@ func startTestServer(t *testing.T, h *Handlers) *Client {
 // Client helper cannot express.
 func startTestServerWithAddr(t *testing.T, h *Handlers) (*Client, string) {
 	t.Helper()
-	srv := NewServer(testZone, h).WithDiscovery("127.0.0.1.", 53)
+	return startServerWithAddr(t, NewServer(testZone, h).WithDiscovery("127.0.0.1.", 53))
+}
+
+// startServerWithAddr starts an in-process UDP test server for the given
+// preconfigured Server and returns a client plus the listen address. It lets
+// tests configure server options such as TSIG (protocol §11) that the default
+// startTestServer helpers do not expose.
+func startServerWithAddr(t *testing.T, srv *Server) (*Client, string) {
+	t.Helper()
 	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
 		t.Fatalf("bind udp: %v", err)
 	}
-	dnsSrv := &dns.Server{PacketConn: udpConn, Handler: srv.Handler()}
+	dnsSrv := &dns.Server{PacketConn: udpConn, Handler: srv.Handler(), TsigProvider: srv.tsig.provider()}
 	done := make(chan struct{})
 	go func() {
 		_ = dnsSrv.ActivateAndServe()
