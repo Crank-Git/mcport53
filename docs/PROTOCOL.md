@@ -149,6 +149,13 @@ Full call name:
 **Encoding alphabet & charset rule:** only `a–z` and `2–7` are emitted, guaranteeing
 DNS-safety and avoiding case/`-`/`_` ambiguity.
 
+**Case.** DNS names are case-insensitive, and recursive resolvers may randomise
+the case of the names they forward (DNS 0x20) and require the answer to echo it.
+Every label the protocol emits is lowercase, so the server lowercases the name
+before parsing it (structural labels, tool, nonce, arguments and signature) and
+answers with the question exactly as received. Signatures are computed over the
+lowercase forms, so a case-randomised copy of a signed call still verifies.
+
 ---
 
 ## 4. Result envelope
