@@ -79,6 +79,7 @@ type Server struct {
 	handlers   Handlers
 	srvTarget  string      // SRV target advertised in discovery; defaults to "localhost."
 	srvPort    uint16      // SRV port advertised in discovery; defaults to 53
+	ns         string      // NS/SOA name server host; defaults to ns.<zone>
 	tsig       *TsigKeys   // optional TSIG keys for transport-layer integrity (protocol §8)
 	tls        *tls.Config // optional TLS config; when set, ListenAndServe serves over DoT (protocol §8)
 
@@ -154,23 +155,33 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	if len(r.Question) != 1 {
-		m.Rcode = dns.RcodeNameError
+		m.Rcode = dns.RcodeFormatError
 		_ = w.WriteMsg(m)
 		return
 	}
 
-	labels := NameToLabels(r.Question[0].Name)
+	q := r.Question[0]
+	labels := NameToLabels(q.Name)
 	prefix, ok := s.splitZone(labels)
 	if !ok {
-		m.Rcode = dns.RcodeNameError
+		// Not authoritative for this name (RFC 1035 §4.1.1).
+		m.Authoritative = false
+		m.Rcode = dns.RcodeRefused
 		_ = w.WriteMsg(m)
 		return
 	}
 	caller := callerAddr(w.RemoteAddr())
+	wantTXT := q.Qtype == dns.TypeTXT || q.Qtype == dns.TypeANY
 
 	switch {
+	case len(prefix) == 0:
+		s.serveApex(r, m)
 	case isDiscovery(prefix):
 		s.serveDiscovery(r, m)
+	case !wantTXT:
+		// Tool data is carried in TXT only. Any other type is NODATA, and a
+		// call is never run for it (RFC 2308 §2.2).
+		s.nodata(r, m)
 	case isSchema(prefix):
 		s.serveSchema(r, m, prefix)
 	case isCall(prefix):
@@ -180,7 +191,11 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	case isJob(prefix):
 		s.serveJob(r, m, labels)
 	default:
-		m.Rcode = dns.RcodeNameError
+		// Every name under the zone may be an ancestor of a call name, so an
+		// unknown shape is an empty non-terminal: NODATA, never NXDOMAIN. A
+		// QNAME-minimising resolver walks these names on the way down, and
+		// NXDOMAIN would tell it nothing exists below (RFC 8020).
+		s.nodata(r, m)
 	}
 	s.fitResponse(w, r, m)
 	// Sign the response with the same TSIG key that authenticated the query
@@ -327,6 +342,22 @@ func (s *Server) ListenAndServe(addr string) error {
 	return err
 }
 
+// Addr returns the address ListenAndServe is serving on, or "" before it has
+// started. It is useful with an ephemeral port (":0").
+func (s *Server) Addr() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, srv := range s.running {
+		if srv.PacketConn != nil {
+			return srv.PacketConn.LocalAddr().String()
+		}
+		if srv.Listener != nil {
+			return srv.Listener.Addr().String()
+		}
+	}
+	return ""
+}
+
 // Shutdown stops every listener started by ListenAndServe.
 func (s *Server) Shutdown() {
 	s.mu.Lock()
@@ -432,7 +463,97 @@ func callerAddr(addr net.Addr) string {
 	return addr.String()
 }
 
+// zoneFqdn returns the zone apex as a fully-qualified name.
+func (s *Server) zoneFqdn() string { return dns.Fqdn(s.zone) }
+
+// soa returns the zone's SOA record. The minimum TTL is 0 so resolvers do not
+// cache negative answers: every call name is new, and a cached NODATA would
+// only get in the way.
+func (s *Server) soa() *dns.SOA {
+	return &dns.SOA{
+		Hdr:     dns.RR_Header{Name: s.zoneFqdn(), Rrtype: dns.TypeSOA, Class: dns.ClassINET, Ttl: 0},
+		Ns:      s.nameserver(),
+		Mbox:    dns.Fqdn("hostmaster." + s.zone),
+		Serial:  1,
+		Refresh: 3600,
+		Retry:   600,
+		Expire:  86400,
+		Minttl:  0,
+	}
+}
+
+// nameserver is the NS target for the apex: the name set with WithNameserver,
+// or ns.<zone>.
+func (s *Server) nameserver() string {
+	if s.ns != "" {
+		return s.ns
+	}
+	return dns.Fqdn("ns." + s.zone)
+}
+
+// WithNameserver sets the host name the zone's NS and SOA records name. It
+// should match the NS records that delegate the zone in its parent.
+func (s *Server) WithNameserver(host string) *Server {
+	s.ns = dns.Fqdn(host)
+	return s
+}
+
+// nodata answers NOERROR with no records and the SOA in the authority
+// section (RFC 2308).
+func (s *Server) nodata(r, m *dns.Msg) {
+	buildEmptyResponse(r, m)
+	m.Ns = append(m.Ns, s.soa())
+}
+
+// serveApex answers SOA and NS at the zone apex, and NODATA for other types.
+func (s *Server) serveApex(r, m *dns.Msg) {
+	buildEmptyResponse(r, m)
+	switch r.Question[0].Qtype {
+	case dns.TypeSOA:
+		m.Answer = append(m.Answer, s.soa())
+	case dns.TypeNS:
+		m.Answer = append(m.Answer, &dns.NS{
+			Hdr: dns.RR_Header{Name: s.zoneFqdn(), Rrtype: dns.TypeNS, Class: dns.ClassINET, Ttl: 0},
+			Ns:  s.nameserver(),
+		})
+	case dns.TypeANY:
+		m.Answer = append(m.Answer, s.soa())
+	default:
+		m.Ns = append(m.Ns, s.soa())
+	}
+}
+
+// serveDiscovery answers the discovery name (protocol §2.1): the document as
+// TXT, the SRV record as SRV, both for ANY, and NODATA for other types.
 func (s *Server) serveDiscovery(r, m *dns.Msg) {
+	qt := r.Question[0].Qtype
+	if qt != dns.TypeTXT && qt != dns.TypeSRV && qt != dns.TypeANY {
+		s.nodata(r, m)
+		return
+	}
+	if qt == dns.TypeSRV {
+		buildEmptyResponse(r, m)
+		s.appendSRV(m)
+		return
+	}
+	s.serveDiscoveryTXT(r, m)
+	if qt == dns.TypeANY {
+		s.appendSRV(m)
+	}
+}
+
+func (s *Server) appendSRV(m *dns.Msg) {
+	if s.srvTarget == "" {
+		return
+	}
+	m.Answer = append(m.Answer, &dns.SRV{
+		Hdr:    dns.RR_Header{Name: m.Question[0].Name, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: 0},
+		Target: dns.Fqdn(s.srvTarget),
+		Port:   s.srvPort,
+	})
+}
+
+func (s *Server) serveDiscoveryTXT(r, m *dns.Msg) {
 	h := s.handlers
 	if h.OnDiscovery == nil {
 		buildTXTResponse(r, m, `{"version":0,"tools":[]}`)
@@ -445,14 +566,6 @@ func (s *Server) serveDiscovery(r, m *dns.Msg) {
 		return
 	}
 	buildTXTResponse(r, m, string(b))
-	if s.srvTarget != "" {
-		name := m.Question[0].Name
-		m.Answer = append(m.Answer, &dns.SRV{
-			Hdr:    dns.RR_Header{Name: name, Rrtype: dns.TypeSRV, Class: dns.ClassINET, Ttl: 0},
-			Target: dns.Fqdn(s.srvTarget),
-			Port:   s.srvPort,
-		})
-	}
 }
 
 func (s *Server) serveSchema(r, m *dns.Msg, prefix []string) {

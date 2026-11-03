@@ -62,15 +62,14 @@ func (c *Client) SetNet(net string) {
 // document (protocol §2.1).
 func (c *Client) Discovery(zone string) (*DiscoveryResponse, error) {
 	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn("_mcp._udp."+strings.TrimSuffix(zone, ".")), dns.TypeSRV)
-	m.RecursionDesired = false
+	m.SetQuestion(dns.Fqdn("_mcp._udp."+strings.TrimSuffix(zone, ".")), dns.TypeTXT)
 
 	resp, err := c.exchange(m)
 	if err != nil {
 		return nil, err
 	}
 	if resp.Rcode != dns.RcodeSuccess {
-		return nil, fmt.Errorf("dns: discovery NXDOMAIN for _mcp._udp.%s", strings.TrimSuffix(zone, "."))
+		return nil, fmt.Errorf("dns: discovery for _mcp._udp.%s returned rcode %s", strings.TrimSuffix(zone, "."), dns.RcodeToString[resp.Rcode])
 	}
 	txt, err := extractTXT(resp)
 	if err != nil {
@@ -237,8 +236,10 @@ func (c *Client) Job(zone, job string) (*codec.Envelope, error) {
 // advanced use and testing.
 func (c *Client) Query(name string, qtype uint16) (*dns.Msg, error) {
 	m := new(dns.Msg)
+	// SetQuestion sets RD=1: through a recursive resolver RD=0 asks for a
+	// cache-only answer, which a resolver refuses for a name it has not seen.
+	// An authoritative server ignores RD.
 	m.SetQuestion(name, qtype)
-	m.RecursionDesired = false
 	return c.exchange(m)
 }
 

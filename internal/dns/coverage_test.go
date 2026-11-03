@@ -134,19 +134,20 @@ func TestMalformedJobName(t *testing.T) {
 	}
 }
 
-// queryTXT / queryEnvelope: a name that matches no known shape gets NXDOMAIN.
-func TestQueryTXTNXDOMAIN(t *testing.T) {
+// queryTXT / queryEnvelope: a name that matches no known shape gets NODATA,
+// which carries no TXT answer.
+func TestQueryTXTNODATA(t *testing.T) {
 	c := startTestServer(t, &Handlers{})
 	if _, err := c.queryTXT(dns.Fqdn("nonexistent.example."), dns.TypeTXT); err == nil {
-		t.Fatal("expected an error for an NXDOMAIN query")
+		t.Fatal("expected an error for a NODATA query")
 	}
 }
 
-// Discovery: a foreign zone returns NXDOMAIN.
-func TestDiscoveryNXDOMAIN(t *testing.T) {
+// Discovery: a foreign zone is REFUSED.
+func TestDiscoveryForeignZone(t *testing.T) {
 	c := startTestServer(t, &Handlers{})
 	if _, err := c.Discovery("nonexample."); err == nil {
-		t.Fatal("expected an NXDOMAIN error for a foreign zone")
+		t.Fatal("expected an error for a foreign zone")
 	}
 }
 
@@ -156,7 +157,7 @@ func TestSetNet(t *testing.T) {
 	c.SetNet("tcp")
 }
 
-// A foreign-zone schema query returns NXDOMAIN through queryEnvelope.
+// A foreign-zone schema query is REFUSED, surfacing through queryEnvelope.
 func TestSchemaForeignZone(t *testing.T) {
 	c := startTestServer(t, &Handlers{})
 	if _, err := c.Schema("nonexample.", "echo"); err == nil {
