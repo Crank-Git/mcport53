@@ -1,7 +1,9 @@
 package dns
 
 import (
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net"
 	"strings"
 
@@ -72,8 +74,10 @@ type Server struct {
 	zone       string
 	zoneLabels []string
 	handlers   Handlers
-	srvTarget  string // SRV target advertised in discovery; defaults to "localhost."
-	srvPort    uint16 // SRV port advertised in discovery; defaults to 53
+	srvTarget  string      // SRV target advertised in discovery; defaults to "localhost."
+	srvPort    uint16      // SRV port advertised in discovery; defaults to 53
+	tsig       *TsigKeys   // optional TSIG keys for transport-layer integrity (protocol §11)
+	tls        *tls.Config // optional TLS config; when set, ListenAndServe serves over DoT (protocol §11)
 }
 
 // NewServer builds a Server authoritative for zone (e.g. "example." or
@@ -107,6 +111,18 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	*m = *reply(r)
 	m.Authoritative = true
 
+	// Transport-layer integrity (protocol §11): when TSIG is configured every
+	// query must carry a valid signature over the message. A missing or invalid
+	// signature is rejected before any handler runs, so TSIG is a true gateway
+	// filter rather than an application concern.
+	if s.tsig != nil {
+		if err := s.verifyTSIG(w, r); err != nil {
+			buildTXTResponse(r, m, envelopeTXT(codec.Error("", "dns: "+err.Error())))
+			_ = w.WriteMsg(m)
+			return
+		}
+	}
+
 	if len(r.Question) != 1 {
 		m.Rcode = dns.RcodeNameError
 		_ = w.WriteMsg(m)
@@ -136,12 +152,60 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	default:
 		m.Rcode = dns.RcodeNameError
 	}
+	// Sign the response with the same TSIG key that authenticated the query
+	// (protocol §11), so the client can confirm the answer came from this server
+	// and was not tampered with on the wire.
+	if s.tsig != nil {
+		if t := r.IsTsig(); t != nil {
+			m.SetTsig(t.Hdr.Name, s.tsig.Algorithm(), s.tsig.Fudge(), 0)
+		}
+	}
 	_ = w.WriteMsg(m)
 }
 
-// ListenAndServe starts the server on addr (e.g. "127.0.0.1:53") over UDP.
+// WithTSIG requires every query to carry a valid TSIG signature over secret
+// (protocol §11). The server verifies each query's signature and signs its
+// responses with the same key, so the exchange is authenticated and
+// integrity-checked at the transport layer. Queries without a valid signature
+// are rejected before any handler runs. TSIG complements (does not replace) the
+// application HMAC of protocol §7.
+func (s *Server) WithTSIG(name string, secret []byte) *Server {
+	if s.tsig == nil {
+		s.tsig = NewTsigKeys()
+	}
+	s.tsig.With(name, secret)
+	return s
+}
+
+// WithTSIGKeys installs a pre-built set of TSIG keys (protocol §11). It allows a
+// server to accept more than one key name.
+func (s *Server) WithTSIGKeys(keys *TsigKeys) *Server {
+	s.tsig = keys
+	return s
+}
+
+// WithTLS configures TLS for ListenAndServe, which then serves over
+// DNS-over-TLS (RFC 8483) instead of UDP (protocol §11). The supplied
+// *tls.Config must carry a certificate and private key.
+func (s *Server) WithTLS(cfg *tls.Config) *Server {
+	s.tls = cfg
+	return s
+}
+
+// ListenAndServe starts the server on addr (e.g. "127.0.0.1:53"). It serves over
+// UDP by default, or over DNS-over-TLS when WithTLS has configured a TLS cert.
 func (s *Server) ListenAndServe(addr string) error {
-	return (&dns.Server{Addr: addr, Net: "udp", Handler: s}).ListenAndServe()
+	dnsSrv := &dns.Server{
+		Addr:         addr,
+		Net:          "udp",
+		Handler:      s,
+		TsigProvider: s.tsig.provider(),
+	}
+	if s.tls != nil {
+		dnsSrv.Net = "tcp-tls"
+		dnsSrv.TLSConfig = s.tls
+	}
+	return dnsSrv.ListenAndServe()
 }
 
 // splitZone separates the labels under the server's zone from the zone labels
@@ -200,6 +264,20 @@ func indexOf(labels []string, want string) int {
 		}
 	}
 	return -1
+}
+
+// verifyTSIG enforces transport-layer integrity (protocol §11). It returns nil
+// when TSIG is not configured, or when a valid TSIG signature is present. It
+// returns an error when a signature is required but absent (badsig) or invalid
+// (badsig), so a caller can reject the query.
+func (s *Server) verifyTSIG(w dns.ResponseWriter, r *dns.Msg) error {
+	if r.IsTsig() == nil {
+		return errors.New("query is not signed with the required TSIG key")
+	}
+	if err := w.TsigStatus(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // callerAddr returns the host portion of a remote address, used as the caller

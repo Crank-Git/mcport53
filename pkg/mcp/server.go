@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -25,6 +26,9 @@ type Server struct {
 	useCursor    bool              // hand out opaque pagination cursors instead of fixed indices (protocol §4.4)
 	cursorMu     sync.Mutex
 	cursorNS     map[string]string // session -> opaque cursor nonce
+	tsigName     string            // optional TSIG key name for transport integrity (protocol §11)
+	tsigSecret   []byte            // optional TSIG shared secret (protocol §11)
+	tls          *tls.Config       // optional DoT certificate config (protocol §11)
 }
 
 // NewServer builds a Server for the given registry with a fresh result store.
@@ -72,6 +76,40 @@ func (s *Server) WithCompression() *Server {
 func (s *Server) WithCursorPagination() *Server {
 	s.useCursor = true
 	return s
+}
+
+// WithTSIG requires every query to carry a TSIG signature over secret (protocol
+// §11). The server verifies each query and signs its responses with the same
+// key, authenticating the exchange at the transport layer in addition to any
+// application HMAC (protocol §7).
+func (s *Server) WithTSIG(name string, secret []byte) *Server {
+	s.tsigName = name
+	s.tsigSecret = secret
+	return s
+}
+
+// WithTLS serves the server over DNS-over-TLS (RFC 8483) with cfg (protocol §11).
+// The *tls.Config must carry a certificate and private key.
+func (s *Server) WithTLS(cfg *tls.Config) *Server {
+	s.tls = cfg
+	return s
+}
+
+// ApplyTransport installs the configured TLS and TSIG settings on the dns.Server
+// (protocol §11). It must be called when building the server:
+//
+//	dnsSrv := dns.NewServer(zone, &server.Handlers())
+//	dnsSrv = server.ApplyTransport(dnsSrv)
+//
+// It is a no-op for a setting that was not configured.
+func (s *Server) ApplyTransport(dnsSrv *dns.Server) *dns.Server {
+	if s.tls != nil {
+		dnsSrv = dnsSrv.WithTLS(s.tls)
+	}
+	if s.tsigName != "" {
+		dnsSrv = dnsSrv.WithTSIG(s.tsigName, s.tsigSecret)
+	}
+	return dnsSrv
 }
 
 // Handlers returns the dns.Handlers that expose the registry over DNS.

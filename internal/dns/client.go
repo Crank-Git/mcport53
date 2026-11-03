@@ -2,6 +2,7 @@ package dns
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,9 @@ type Client struct {
 	discoveryKey []byte                                                 // optional key to verify signed discovery documents (protocol §8)
 	dohURL       string                                                 // optional DoH endpoint (RFC 8484); when set, queries go here (protocol §12)
 	httpClient   *http.Client                                           // used when dohURL is set
+	tsig         *TsigKeys                                              // optional TSIG keys for transport integrity (protocol §11)
+	tsigName     string                                                 // canonical TSIG key name used to sign outgoing queries (protocol §11)
+	insecureSkip bool                                                   // skip TLS certificate verification (protocol §11)
 }
 
 // NewClient builds a Client for the server at serverAddr ("host:port"). The
@@ -96,6 +100,45 @@ func (c *Client) WithSigner(signer func(tool, nonce string, args []byte, ts int6
 // signature does not verify.
 func (c *Client) WithDiscoveryKey(key []byte) *Client {
 	c.discoveryKey = key
+	return c
+}
+
+// WithTSIG signs every query with a TSIG over the shared secret (protocol §11).
+// name is the TSIG key name; the server must hold the same secret for that name.
+// The response is verified with the same secret, so the exchange is authenticated
+// and integrity-checked at the transport layer, in addition to any application
+// HMAC (protocol §7).
+func (c *Client) WithTSIG(name string, secret []byte) *Client {
+	if c.tsig == nil {
+		c.tsig = NewTsigKeys()
+	}
+	c.tsig.With(name, secret)
+	c.tsigName = CanonicalKey(name)
+	c.dc.TsigProvider = c.tsig.provider()
+	return c
+}
+
+// WithTLS makes the client reach the server over DNS-over-TLS (RFC 8483) by
+// switching the transport to tcp-tls with cfg. TLS provides confidentiality and
+// server authentication; pair it with WithInsecureSkipVerify for self-signed
+// certificates (protocol §11). TSIG may be layered on top for message-level
+// authentication as well.
+func (c *Client) WithTLS(cfg *tls.Config) *Client {
+	c.dc.Net = "tcp-tls"
+	c.dc.TLSConfig = cfg
+	return c
+}
+
+// WithInsecureSkipVerify accepts any server certificate (self-signed or
+// hostname-mismatched). It weakens TLS to confidentiality + tamper protection
+// only; keep it for tests and local deployments, never against a public server
+// (protocol §11).
+func (c *Client) WithInsecureSkipVerify() *Client {
+	if c.dc.TLSConfig == nil {
+		c.dc.TLSConfig = &tls.Config{InsecureSkipVerify: true}
+	} else {
+		c.dc.TLSConfig.InsecureSkipVerify = true
+	}
 	return c
 }
 
@@ -194,10 +237,14 @@ func (c *Client) Query(name string, qtype uint16) (*dns.Msg, error) {
 
 // exchange sends m and returns the response. When the client is configured with a
 // DoH endpoint (see WithDoH) the query goes there (protocol §12); otherwise it is
-// sent directly to the server address over UDP/TCP.
+// sent directly to the server address over UDP/TCP. When TSIG is configured
+// (protocol §11) the query is signed with the shared secret.
 func (c *Client) exchange(m *dns.Msg) (*dns.Msg, error) {
 	if c.dohURL != "" {
 		return c.dohExchange(m)
+	}
+	if c.tsig != nil {
+		m.SetTsig(c.tsigName, c.tsig.Algorithm(), c.tsig.Fudge(), 0)
 	}
 	resp, _, err := c.dc.Exchange(m, c.server)
 	return resp, err

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -43,6 +44,29 @@ func (a *Agent) WithKeys(reg *auth.KeyRegistry) *Agent {
 // signature does not verify.
 func (a *Agent) WithDiscoveryKey(key []byte) *Agent {
 	a.client.WithDiscoveryKey(key)
+	return a
+}
+
+// WithTSIG signs every query with a TSIG over the shared secret (protocol §11).
+// The server must hold the same secret; responses are verified with it too, so
+// the exchange is authenticated and integrity-checked at the transport layer.
+func (a *Agent) WithTSIG(name string, secret []byte) *Agent {
+	a.client.WithTSIG(name, secret)
+	return a
+}
+
+// WithTLS reaches the server over DNS-over-TLS (RFC 8483) with cfg (protocol §11).
+// Pair it with WithInsecureSkipVerify for self-signed certificates.
+func (a *Agent) WithTLS(cfg *tls.Config) *Agent {
+	a.client.WithTLS(cfg)
+	return a
+}
+
+// WithInsecureSkipVerify accepts any server certificate (self-signed or
+// hostname-mismatched), weakening TLS to confidentiality + tamper protection
+// (protocol §11). Keep it for tests and local deployments.
+func (a *Agent) WithInsecureSkipVerify() *Agent {
+	a.client.WithInsecureSkipVerify()
 	return a
 }
 
