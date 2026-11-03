@@ -1,0 +1,139 @@
+package mcp
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Crank-Git/mcport53/internal/auth"
+	"github.com/Crank-Git/mcport53/internal/codec"
+	"github.com/Crank-Git/mcport53/internal/dns"
+	"github.com/Crank-Git/mcport53/internal/testresolver"
+)
+
+// serveFull runs srv on UDP+TCP via ListenAndServe and returns its address.
+func serveFull(t *testing.T, srv *Server, zone string) string {
+	t.Helper()
+	h := srv.Handlers()
+	ds := srv.ApplyTransport(dns.NewServer(zone, &h).WithDiscovery("127.0.0.1.", 53))
+	errc := make(chan error, 1)
+	go func() { errc <- ds.ListenAndServe("127.0.0.1:0") }()
+	deadline := time.Now().Add(5 * time.Second)
+	for ds.Addr() == "" {
+		select {
+		case err := <-errc:
+			t.Fatalf("ListenAndServe: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("server did not start")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Cleanup(func() { ds.Shutdown(); <-errc })
+	return ds.Addr()
+}
+
+// viaResolver returns an Agent that reaches srv only through a real Unbound
+// resolver (QNAME minimisation on).
+func viaResolver(t *testing.T, srv *Server, opt testresolver.Options) *Agent {
+	t.Helper()
+	upstream := serveFull(t, srv, agentZone)
+	resolver := testresolver.Start(t, upstream, agentZone, opt)
+	a := NewAgent(resolver, agentZone)
+	a.SetTimeout(5 * time.Second)
+	return a
+}
+
+func resolverRegistry(t *testing.T) *Registry {
+	t.Helper()
+	random := make([]byte, 6000)
+	_, _ = rand.Read(random)
+	big := base64.StdEncoding.EncodeToString(random)
+	r := echoRegistry(t)
+	_ = r.Register(&Tool{Name: "big", Call: func(_ context.Context, args []byte) (*codec.Envelope, error) {
+		text := big
+		if string(args) == `"compressible"` {
+			text = strings.Repeat("compressible text ", 1500)
+		}
+		re, _ := codec.JSONResult(map[string]string{"text": text})
+		return codec.OK("big", re, 0), nil
+	}})
+	return r
+}
+
+func jsonText(t *testing.T, re *codec.ResultEnvelope) string {
+	t.Helper()
+	var v map[string]string
+	if err := json.Unmarshal([]byte(re.Value), &v); err != nil {
+		t.Fatalf("result: %v (%q)", err, re.Value)
+	}
+	return v["text"]
+}
+
+// TestThroughResolver runs every feature that should work through a
+// recursive resolver against a real Unbound.
+func TestThroughResolver(t *testing.T) {
+	t.Run("discovery", func(t *testing.T) {
+		a := viaResolver(t, NewServer(resolverRegistry(t)), testresolver.Options{})
+		doc, err := a.Discovery()
+		if err != nil || len(doc.Tools) != 2 {
+			t.Fatalf("discovery: %+v %v", doc, err)
+		}
+	})
+	t.Run("call", func(t *testing.T) {
+		a := viaResolver(t, NewServer(resolverRegistry(t)), testresolver.Options{})
+		re, err := a.Call(context.Background(), "echo", []byte(`{}`))
+		if err != nil || !strings.Contains(re.Value, "hi") {
+			t.Fatalf("call: %+v %v", re, err)
+		}
+	})
+	t.Run("signed call", func(t *testing.T) {
+		keys := auth.NewKeyRegistry([]byte("resolver-key"))
+		a := viaResolver(t, NewServer(resolverRegistry(t)).WithKeys(keys), testresolver.Options{})
+		if _, err := a.Call(context.Background(), "echo", []byte(`{}`)); err == nil || !strings.Contains(err.Error(), "not signed") {
+			t.Fatalf("unsigned call: err = %v, want not signed", err)
+		}
+		a.WithKeys(keys)
+		if _, err := a.Call(context.Background(), "echo", []byte(`{}`)); err != nil {
+			t.Fatalf("signed call: %v", err)
+		}
+	})
+	for _, mode := range []struct {
+		name             string
+		compress, cursor bool
+		args             string
+	}{
+		{"chunked", false, false, `{}`},
+		{"chunked cursor", false, true, `{}`},
+		{"compressed", true, false, `"compressible"`},
+		{"compressed chunked cursor", true, true, `{}`},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			srv := NewServer(resolverRegistry(t))
+			if mode.compress {
+				srv = srv.WithCompression()
+			}
+			if mode.cursor {
+				srv = srv.WithCursorPagination()
+			}
+			direct, _ := countingAgent(t, srv)
+			want, err := direct.Call(context.Background(), "big", []byte(mode.args))
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := viaResolver(t, srv, testresolver.Options{})
+			got, err := a.Call(context.Background(), "big", []byte(mode.args))
+			if err != nil {
+				t.Fatalf("via resolver: %v", err)
+			}
+			if jsonText(t, got) != jsonText(t, want) {
+				t.Fatal("result through the resolver differs from the direct result")
+			}
+		})
+	}
+}

@@ -388,25 +388,27 @@ func TestJobProtocol(t *testing.T) {
 	}
 }
 
-func TestUnknownNXDOMAIN(t *testing.T) {
+// An unknown shape under the zone is an empty non-terminal: NODATA with the
+// SOA, never NXDOMAIN (see authoritative_test.go).
+func TestUnknownNameIsNODATA(t *testing.T) {
 	c, _ := newTestServer(t)
 	resp, err := c.Query(dns.Fqdn("definitely-a-tool.example."), dns.TypeTXT)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if resp.Rcode != dns.RcodeNameError {
-		t.Fatalf("rcode = %d (%s), want NXDOMAIN", resp.Rcode, dns.RcodeToString[resp.Rcode])
+	if resp.Rcode != dns.RcodeSuccess || len(resp.Answer) != 0 || len(resp.Ns) != 1 {
+		t.Fatalf("rcode=%s answer=%d ns=%d, want NODATA with SOA", dns.RcodeToString[resp.Rcode], len(resp.Answer), len(resp.Ns))
 	}
 }
 
-func TestBadZoneNXDOMAIN(t *testing.T) {
+func TestForeignZoneRefused(t *testing.T) {
 	c, _ := newTestServer(t)
 	resp, err := c.Query(dns.Fqdn("echo.call.abc123.notexample."), dns.TypeTXT)
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if resp.Rcode != dns.RcodeNameError {
-		t.Fatalf("rcode = %d, want NXDOMAIN for foreign zone", resp.Rcode)
+	if resp.Rcode != dns.RcodeRefused || resp.Authoritative {
+		t.Fatalf("rcode = %s aa=%v, want non-authoritative REFUSED for a foreign zone", dns.RcodeToString[resp.Rcode], resp.Authoritative)
 	}
 }
 
@@ -518,10 +520,10 @@ func TestAuthTamperedRejected(t *testing.T) {
 	}
 }
 
-// TestMultiQuestionNXDOMAIN covers ServeDNS's != 1 question guard. The miekg
+// TestMultiQuestionFormErr covers ServeDNS's != 1 question guard. The miekg
 // server rejects multi-question messages before reaching the handler by
 // default, so we install an accept func that admits them.
-func TestMultiQuestionNXDOMAIN(t *testing.T) {
+func TestMultiQuestionFormErr(t *testing.T) {
 	srv := NewServer(testZone, &Handlers{}).WithDiscovery("127.0.0.1.", 53)
 	udpConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	if err != nil {
@@ -549,8 +551,8 @@ func TestMultiQuestionNXDOMAIN(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query: %v", err)
 	}
-	if resp.Rcode != dns.RcodeNameError {
-		t.Fatalf("rcode = %d, want NXDOMAIN for multi-question", resp.Rcode)
+	if resp.Rcode != dns.RcodeFormatError {
+		t.Fatalf("rcode = %d, want FORMERR for multi-question", resp.Rcode)
 	}
 }
 

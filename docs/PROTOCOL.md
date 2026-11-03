@@ -74,6 +74,10 @@ not equal a reserved structural label.
   Lists the tools the server offers, as a JSON array of `{name, description,
   inputSchema}` (the MCP `tool` shape). This is the discovery document.
 
+Each record type is returned only for its own query type: a TXT query gets the
+document, an SRV query the SRV record, ANY both, and other types NODATA. Clients
+read discovery with a TXT query.
+
   ```
   _mcp._udp.example.  IN  TXT  "{\"version\":1,\"tools\":[...]}"
   ```
@@ -363,9 +367,21 @@ Nonces also defeat caching (§6) because every name is unique.
   retry truncated answers over TCP automatically.
 - **Port:** client → server on UDP/53 (or a custom port advertised in SRV). Using
   53 is what lets traffic traverse restrictive egress.
-- **Message format:** standard DNS `QUERY` with `RD=1`, and `ANSWER` RRsets. No
-  TSIG required (HMAC is applied at the application layer per §7), though TSIG can
-  be layered on for transport integrity.
+- **Message format:** standard DNS `QUERY` with `RD=1` (through a recursive
+  resolver `RD=0` asks for a cache-only answer), and `ANSWER` RRsets. No TSIG
+  required (HMAC is applied at the application layer per §7), though TSIG can be
+  layered on for transport integrity.
+- **Authoritative behaviour.** The server answers like an authoritative server so
+  recursive resolvers accept its responses:
+  - every response sets `QR` and `AA`; a name outside the zone is `REFUSED`;
+  - tool data travels only in TXT: a call, schema, chunk or job name queried with
+    any other type is NODATA, and a call is never run for it;
+  - every other name under the zone is an empty non-terminal: NOERROR with no
+    answer and the zone SOA in the authority section (RFC 2308), never NXDOMAIN.
+    A QNAME-minimising resolver (RFC 9156) asks for each ancestor of a call name
+    on the way down, and NXDOMAIN there would end the lookup (RFC 8020);
+  - the apex answers SOA and NS. The SOA minimum TTL is 0, and every answer has
+    TTL 0, so resolvers do not cache call results or negative answers.
 - **Over DoH (resolver path):** the same query names work over encrypted DNS,
   giving privacy + the same egress-friendly footprint. In a real deployment the
   client reaches the authoritative server through a normal resolver rather than

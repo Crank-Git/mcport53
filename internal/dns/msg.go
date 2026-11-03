@@ -29,11 +29,16 @@ func LabelsToName(labels []string) string {
 	return dns.Fqdn(strings.Join(labels, "."))
 }
 
-// reply builds an authoritative reply header for r (id, question, RD flag).
+// reply builds a reply header for r: id, opcode, question, the RD and CD
+// flags copied from the query, and QR set. Resolvers discard a "response"
+// without QR (RFC 1035 §4.1.1), so every reply must carry it.
 func reply(r *dns.Msg) *dns.Msg {
 	resp := new(dns.Msg)
 	resp.Id = r.Id
+	resp.Response = true
+	resp.Opcode = r.Opcode
 	resp.RecursionDesired = r.RecursionDesired
+	resp.CheckingDisabled = r.CheckingDisabled
 	resp.Question = r.Question
 	return resp
 }
