@@ -67,21 +67,13 @@ func exchange1232(t *testing.T, addr, name string, secret []byte) (*miedns.Msg, 
 
 func txtEnvelope(t *testing.T, resp *miedns.Msg) *codec.Envelope {
 	t.Helper()
-	var sb strings.Builder
-	for _, rr := range resp.Answer {
-		if txt, ok := rr.(*miedns.TXT); ok {
-			for _, s := range txt.Txt {
-				d, err := base64.StdEncoding.DecodeString(s)
-				if err != nil {
-					t.Fatal(err)
-				}
-				sb.Write(d)
-			}
-		}
-	}
-	e, err := codec.ParseEnvelope([]byte(sb.String()))
+	raw, err := dns.ExtractTXT(resp)
 	if err != nil {
-		t.Fatalf("envelope: %v (%q)", err, sb.String())
+		t.Fatalf("TXT answer: %v", err)
+	}
+	e, err := codec.ParseEnvelope([]byte(raw))
+	if err != nil {
+		t.Fatalf("envelope: %v (%q)", err, raw)
 	}
 	return e
 }
@@ -268,4 +260,26 @@ func TestCompressionHelpsLargeResults(t *testing.T) {
 		t.Fatalf("compressed: %d queries vs %d uncompressed; want at least 10x fewer", gz, plain)
 	}
 	t.Logf("20 KB compressible result: %d queries uncompressed, %d compressed (was 200+ at 100-byte chunks)", plain, gz)
+}
+
+// TestTenKBResultQueryCount pins the query count for a 10 KB incompressible
+// result: one query per 400-byte chunk now that envelopes travel as raw TXT
+// bytes (it was 42 at 240-byte chunks, and 100 at the original 100).
+func TestTenKBResultQueryCount(t *testing.T) {
+	random := make([]byte, 7500)
+	_, _ = rand.Read(random)
+	resultJSON, _ := codec.JSONResult(base64.StdEncoding.EncodeToString(random)) // ~10 KB
+	r := NewRegistry()
+	_ = r.Register(&Tool{Name: "big", Call: func(context.Context, []byte) (*codec.Envelope, error) {
+		return codec.OK("big", resultJSON, 0), nil
+	}})
+	agent, queries := countingAgent(t, NewServer(r))
+	if _, err := agent.Call(context.Background(), "big", []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	want := (len(resultJSON) + 399) / 400
+	if got := int(queries.Load()); got != want || want > 26 {
+		t.Fatalf("%d-byte result: %d queries, want %d", len(resultJSON), got, want)
+	}
+	t.Logf("%d-byte result -> %d queries", len(resultJSON), queries.Load())
 }

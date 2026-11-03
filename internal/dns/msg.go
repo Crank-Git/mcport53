@@ -1,7 +1,6 @@
 package dns
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,8 +9,8 @@ import (
 )
 
 // MaxTXTString is the maximum length (bytes) of a single TXT character-string,
-// per RFC 1035 §5.1. A DNS message may carry several TXT records, but we keep
-// responses to a single string for broad resolver compatibility.
+// per RFC 1035 §5.1. A payload longer than this is split across several
+// strings of one TXT record.
 const MaxTXTString = 255
 
 // NameToLabels splits a fully-qualified domain name into its labels, dropping the
@@ -54,65 +53,117 @@ func splitTXT(msg *dns.Msg) []string {
 	return out
 }
 
-// extractTXT returns the decoded content of the first TXT answer RRset, or an
-// error if none is present. TXT strings are base64-encoded on the wire (see
-// buildTXTResponse) because the installed miekg/dns TXT pack/unpack path is not
-// a clean inverse for strings containing " or \\ -- base64 keeps the payload in
-// the ASCII-safe [A-Za-z0-9+/=] alphabet so it survives the round trip intact.
-func extractTXT(msg *dns.Msg) (string, error) {
+// ExtractTXT returns the payload carried by a message's TXT answers: the
+// unescaped bytes of every character-string, concatenated (protocol §4). It
+// returns an error if there is no TXT answer.
+func ExtractTXT(msg *dns.Msg) (string, error) {
 	strs := splitTXT(msg)
 	if len(strs) == 0 {
 		return "", errors.New("dns: no TXT answer")
 	}
 	var b strings.Builder
 	for _, s := range strs {
-		dec, err := base64.StdEncoding.DecodeString(s)
+		raw, err := unescapeTXT(s)
 		if err != nil {
 			return "", fmt.Errorf("dns: decoding txt: %w", err)
 		}
-		b.Write(dec)
+		b.Write(raw)
 	}
 	return b.String(), nil
 }
 
-// txtChunkSize is the largest base64 payload we place in a single TXT
-// character-string. It is 252: the largest multiple of 4 that fits the 255-byte
-// per-string limit (RFC 1035 §5.1), and a multiple of 4 so every split chunk
-// is still a complete, independently-decodable base64 string.
-const txtChunkSize = 252
+func extractTXT(msg *dns.Msg) (string, error) { return ExtractTXT(msg) }
 
-// buildTXTResponse writes TXT answers holding txt into resp as an authoritative
-// reply to req. txt is base64-encoded before being placed in one or more TXT
-// strings so the payload avoids the " and \ characters that the installed
-// miekg/dns TXT pack/unpack path mishandles (see extractTXT). A payload longer
-// than MaxTXTString is split across several TXT strings, each <= txtChunkSize
-// bytes, so it survives the 255-byte per-string limit (RFC 1035 §5.1).
+// TXTStrings splits payload into TXT character-strings of at most
+// MaxTXTString bytes on the wire (RFC 1035 §5.1), escaped for miekg/dns.
+//
+// miekg/dns holds TXT strings in presentation format: when packing, "\"
+// starts an escape ("\\", "\"", "\DDD"), and when unpacking, quotes,
+// backslashes and non-printable bytes come back escaped. Escaping every byte
+// that needs it here, and unescaping in ExtractTXT, makes the wire carry the
+// payload's exact bytes.
+func TXTStrings(payload string) []string {
+	if payload == "" {
+		return []string{""} // a TXT record holds at least one string
+	}
+	var out []string
+	for len(payload) > 0 {
+		n := MaxTXTString
+		if n > len(payload) {
+			n = len(payload)
+		}
+		out = append(out, escapeTXT(payload[:n]))
+		payload = payload[n:]
+	}
+	return out
+}
+
+// escapeTXT escapes raw bytes for a miekg/dns TXT string.
+func escapeTXT(raw string) string {
+	var b strings.Builder
+	b.Grow(len(raw))
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		switch {
+		case c == '\\' || c == '"':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c < 0x20 || c > 0x7e:
+			fmt.Fprintf(&b, "\\%03d", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// unescapeTXT reverses miekg/dns's presentation escaping of a TXT string:
+// "\DDD" is the byte with decimal value DDD and "\X" is X.
+func unescapeTXT(s string) ([]byte, error) {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '\\' {
+			out = append(out, c)
+			continue
+		}
+		if i+1 >= len(s) {
+			return nil, errors.New("dangling escape")
+		}
+		if d := s[i+1]; d >= '0' && d <= '9' {
+			if i+4 > len(s) {
+				return nil, fmt.Errorf("short \\DDD escape in %q", s)
+			}
+			v := 0
+			for _, x := range []byte(s[i+1 : i+4]) {
+				if x < '0' || x > '9' {
+					return nil, fmt.Errorf("bad \\DDD escape in %q", s)
+				}
+				v = v*10 + int(x-'0')
+			}
+			if v > 255 {
+				return nil, fmt.Errorf("\\DDD escape out of range in %q", s)
+			}
+			out = append(out, byte(v))
+			i += 3
+			continue
+		}
+		out = append(out, s[i+1])
+		i++
+	}
+	return out, nil
+}
+
+// buildTXTResponse writes a TXT answer carrying txt into resp as an
+// authoritative reply to req (protocol §4).
 func buildTXTResponse(req, resp *dns.Msg, txt string) {
 	*resp = *reply(req)
 	resp.Authoritative = true
 	name := resp.Question[0].Name
-	b64 := base64.StdEncoding.EncodeToString([]byte(txt))
 	resp.Answer = append(resp.Answer, &dns.TXT{
 		Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
-		Txt: splitTXTStrings(b64),
+		Txt: TXTStrings(txt),
 	})
-}
-
-// splitTXTStrings splits s into consecutive <=txtChunkSize-byte chunks. s is
-// expected to be base64, whose length is always a multiple of 4; because
-// txtChunkSize is also a multiple of 4, every chunk (including the last) is a
-// complete base64 string that decodes on its own.
-func splitTXTStrings(s string) []string {
-	var out []string
-	for len(s) > 0 {
-		n := txtChunkSize
-		if n > len(s) {
-			n = len(s)
-		}
-		out = append(out, s[:n])
-		s = s[n:]
-	}
-	return out
 }
 
 // buildEmptyResponse writes an authoritative, empty answer to req.

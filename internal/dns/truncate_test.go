@@ -87,7 +87,7 @@ func rawExchange(t *testing.T, network, addr string, m *dns.Msg, provider dns.Ts
 // TestUDPTruncatesToRequesterSize covers the advertised-size matrix: no EDNS
 // (512), EDNS 1232, and an oversized advertisement capped at 4096.
 func TestUDPTruncatesToRequesterSize(t *testing.T) {
-	addr := serve(t, NewServer(testZone, bigHandlers(3000, nil)))
+	addr := serve(t, NewServer(testZone, bigHandlers(6000, nil)))
 	for _, tc := range []struct {
 		name  string
 		edns  uint16 // 0 = no OPT record
@@ -103,7 +103,7 @@ func TestUDPTruncatesToRequesterSize(t *testing.T) {
 		}
 		resp, size := rawExchange(t, "udp", addr, q, nil)
 		if !resp.Truncated {
-			t.Errorf("%s: 3000-byte answer not truncated (size %d)", tc.name, size)
+			t.Errorf("%s: 6000-byte answer not truncated (size %d)", tc.name, size)
 		}
 		if size > tc.limit {
 			t.Errorf("%s: %d-byte UDP answer exceeds %d", tc.name, size, tc.limit)

@@ -7,11 +7,10 @@ import (
 )
 
 // MaxEnvelopeTXT is the largest marshaled envelope (bytes of JSON) a server
-// sends in one response. On the wire the JSON is base64-encoded (4/3) and
-// split across TXT character-strings, so 600 bytes of JSON plus a 255-byte
-// question name, the DNS header, EDNS0 OPT and a TSIG record stay within a
-// 1232-byte EDNS0 UDP message (DNS Flag Day 2020).
-const MaxEnvelopeTXT = 600
+// sends in one response. The JSON travels as raw TXT bytes, so 800 bytes plus
+// a 255-byte question name, the DNS header, EDNS0 OPT and a TSIG record stay
+// within a 1232-byte EDNS0 UDP message (DNS Flag Day 2020).
+const MaxEnvelopeTXT = 800
 
 // Status is the outcome of a call as carried in an Envelope.
 type Status string

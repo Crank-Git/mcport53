@@ -147,19 +147,19 @@ func startRawServer(t *testing.T, fn func(req *dns.Msg) *dns.Msg) *Client {
 	return NewClient(udpConn.LocalAddr().String())
 }
 
-// Discovery: an SRV answer whose TXT is not valid base64 is a decode error.
+// Discovery: a TXT answer that is not a discovery document is an error.
 func TestDiscoveryMalformedTXT(t *testing.T) {
 	c := startRawServer(t, func(req *dns.Msg) *dns.Msg {
 		resp := reply(req)
 		resp.Rcode = dns.RcodeSuccess
 		resp.Answer = []dns.RR{&dns.TXT{
 			Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
-			Txt: []string{"!not-valid-base64!"},
+			Txt: TXTStrings("!not a document!"),
 		}}
 		return resp
 	})
 	if _, err := c.Discovery(testZone); err == nil {
-		t.Fatal("expected a base64 decode error for a malformed TXT answer")
+		t.Fatal("expected an error for a TXT answer that is not a discovery document")
 	}
 }
 
@@ -170,7 +170,7 @@ func TestDiscoveryNonJSON(t *testing.T) {
 		resp.Rcode = dns.RcodeSuccess
 		resp.Answer = []dns.RR{&dns.TXT{
 			Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
-			Txt: []string{b64("not json")},
+			Txt: TXTStrings("not json"),
 		}}
 		return resp
 	})
@@ -571,7 +571,7 @@ func TestDiscoveryVerifiedOK(t *testing.T) {
 		resp.Rcode = dns.RcodeSuccess
 		resp.Answer = []dns.RR{&dns.TXT{
 			Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
-			Txt: []string{b64(string(out))},
+			Txt: TXTStrings(string(out)),
 		}}
 		return resp
 	})
@@ -597,7 +597,7 @@ func TestDiscoveryTamperedRejected(t *testing.T) {
 		tamperedOut, _ := json.Marshal(tampered)
 		resp.Answer = []dns.RR{&dns.TXT{
 			Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
-			Txt: []string{b64(string(tamperedOut))},
+			Txt: TXTStrings(string(tamperedOut)),
 		}}
 		return resp
 	})
@@ -617,7 +617,7 @@ func TestDiscoveryUnsignedRejected(t *testing.T) {
 		resp.Rcode = dns.RcodeSuccess
 		resp.Answer = []dns.RR{&dns.TXT{
 			Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
-			Txt: []string{b64(string(out))},
+			Txt: TXTStrings(string(out)),
 		}}
 		return resp
 	})
