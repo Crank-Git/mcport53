@@ -22,7 +22,7 @@ func CanonicalKey(name string) string {
 }
 
 // TsigKeys is a set of TSIG shared secrets keyed by canonical key name
-// (protocol §11). It implements dns.TsigProvider so a Client can sign outgoing
+// (protocol §8). It implements dns.TsigProvider so a Client can sign outgoing
 // queries and a Server can verify incoming queries and sign responses. The
 // algorithm is HMAC-SHA256 (RFC 4635); the secret is base64-encoded the way
 // miekg/dns expects it.

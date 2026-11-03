@@ -1,5 +1,5 @@
 // Package mcp adapts Model Context Protocol (MCP) tools to the MCPort53 DNS
-// transport (protocol §11). A Registry stores named tools and adapts them to the
+// transport. A Registry stores named tools and adapts them to the
 // dns package's Handlers, while an Agent provides a high-level client that
 // assembles chunked and long-running results.
 package mcp

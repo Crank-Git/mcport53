@@ -29,7 +29,7 @@ func replayTTL(window time.Duration) time.Duration {
 }
 
 // HMACVerifyKeys builds a dns.OnVerify hook that verifies each call with the
-// per-tool HMAC key from reg (protocol §8): the key registered for the called
+// per-tool HMAC key from reg (protocol §7.3): the key registered for the called
 // tool, falling back to reg's default. Unsigned calls, signatures made with the
 // wrong key, and stale timestamps are rejected, and a replay guard rejects reused
 // nonces. reg must be non-nil.

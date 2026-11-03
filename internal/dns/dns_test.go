@@ -95,7 +95,7 @@ func startTestServerWithAddr(t *testing.T, h *Handlers) (*Client, string) {
 
 // startServerWithAddr starts an in-process UDP test server for the given
 // preconfigured Server and returns a client plus the listen address. It lets
-// tests configure server options such as TSIG (protocol §11) that the default
+// tests configure server options such as TSIG (protocol §8) that the default
 // startTestServer helpers do not expose.
 func startServerWithAddr(t *testing.T, srv *Server) (*Client, string) {
 	t.Helper()

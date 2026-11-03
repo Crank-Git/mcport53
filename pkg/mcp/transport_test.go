@@ -12,7 +12,7 @@ import (
 
 // TestApplyTransportConfigures checks that Server.WithTSIG and WithTLS record
 // their settings and that ApplyTransport installs them on a dns.Server (protocol
-// §11).
+// §8).
 func TestApplyTransportConfigures(t *testing.T) {
 	secret := []byte("transport-secret")
 	srv := NewServer(echoRegistry(t)).
@@ -32,7 +32,7 @@ func TestApplyTransportConfigures(t *testing.T) {
 }
 
 // TestApplyTransportTSIG exercises Server.WithTSIG + ApplyTransport end to end:
-// a signed agent call is accepted by a server that requires TSIG (protocol §11).
+// a signed agent call is accepted by a server that requires TSIG (protocol §8).
 func TestApplyTransportTSIG(t *testing.T) {
 	secret := []byte("transport-secret")
 	srv := NewServer(echoRegistry(t)).WithTSIG("mcport53.", secret)

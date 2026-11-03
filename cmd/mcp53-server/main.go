@@ -1,5 +1,5 @@
 // Command mcp53-server runs an authoritative MCPort53 DNS server that exposes a
-// built-in set of MCP tools (protocol §11).
+// built-in set of MCP tools.
 package main
 
 import (
@@ -26,8 +26,8 @@ func main() {
 		zone     = flag.String("zone", "example.", "authoritative base domain (tool zone)")
 		addr     = flag.String("addr", "127.0.0.1:5333", "listen address (host:port)")
 		secret   = flag.String("secret", "", "optional shared secret for HMAC call signatures (protocol §7)")
-		key      = flag.String("key", "", "default HMAC key for per-tool call signatures and signed discovery (protocol §8)")
-		keys     = flag.String("keys", "", "optional per-tool key overrides as tool=key,tool=key (protocol §8)")
+		key      = flag.String("key", "", "default HMAC key for per-tool call signatures and signed discovery (protocol §7.3)")
+		keys     = flag.String("keys", "", "optional per-tool key overrides as tool=key,tool=key (protocol §7.3)")
 		discover = flag.String("discover", "", "SRV target advertised in discovery (host:port; default --addr)")
 		tsig     = flag.String("tsig", "", "require TSIG on every query, as name:secret (protocol §8)")
 		tlsCert  = flag.String("tls-cert", "", "serve DNS-over-TLS with this PEM certificate (with --tls-key)")

@@ -26,7 +26,7 @@ type DiscoveryResponse struct {
 	Version int    `json:"version"`
 	Tools   []Tool `json:"tools"`
 	// Sig is an optional application-layer signature over the document's content
-	// (protocol §8). When present, clients that hold the matching key can verify
+	// (protocol §7.3). When present, clients that hold the matching key can verify
 	// the document's authenticity and integrity. It is omitted from the signed
 	// content itself.
 	Sig string `json:"sig,omitempty"`
@@ -79,8 +79,8 @@ type Server struct {
 	handlers   Handlers
 	srvTarget  string      // SRV target advertised in discovery; defaults to "localhost."
 	srvPort    uint16      // SRV port advertised in discovery; defaults to 53
-	tsig       *TsigKeys   // optional TSIG keys for transport-layer integrity (protocol §11)
-	tls        *tls.Config // optional TLS config; when set, ListenAndServe serves over DoT (protocol §11)
+	tsig       *TsigKeys   // optional TSIG keys for transport-layer integrity (protocol §8)
+	tls        *tls.Config // optional TLS config; when set, ListenAndServe serves over DoT (protocol §8)
 
 	mu      sync.Mutex
 	running []*dns.Server // listeners started by ListenAndServe, for Shutdown
@@ -141,7 +141,7 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	*m = *reply(r)
 	m.Authoritative = true
 
-	// Transport-layer integrity (protocol §11): when TSIG is configured every
+	// Transport-layer integrity (protocol §8): when TSIG is configured every
 	// query must carry a valid signature over the message. A missing or invalid
 	// signature is rejected before any handler runs, so TSIG is a true gateway
 	// filter rather than an application concern.
@@ -184,7 +184,7 @@ func (s *Server) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 	s.fitResponse(w, r, m)
 	// Sign the response with the same TSIG key that authenticated the query
-	// (protocol §11), so the client can confirm the answer came from this server
+	// (protocol §8), so the client can confirm the answer came from this server
 	// and was not tampered with on the wire.
 	if s.tsig != nil {
 		if t := r.IsTsig(); t != nil {
@@ -226,7 +226,7 @@ func isUDP(w dns.ResponseWriter) bool {
 }
 
 // WithTSIG requires every query to carry a valid TSIG signature over secret
-// (protocol §11). The server verifies each query's signature and signs its
+// (protocol §8). The server verifies each query's signature and signs its
 // responses with the same key, so the exchange is authenticated and
 // integrity-checked at the transport layer. Queries without a valid signature
 // are rejected before any handler runs. TSIG complements (does not replace) the
@@ -239,7 +239,7 @@ func (s *Server) WithTSIG(name string, secret []byte) *Server {
 	return s
 }
 
-// WithTSIGKeys installs a pre-built set of TSIG keys (protocol §11). It allows a
+// WithTSIGKeys installs a pre-built set of TSIG keys (protocol §8). It allows a
 // server to accept more than one key name.
 func (s *Server) WithTSIGKeys(keys *TsigKeys) *Server {
 	s.tsig = keys
@@ -247,7 +247,7 @@ func (s *Server) WithTSIGKeys(keys *TsigKeys) *Server {
 }
 
 // WithTLS configures TLS for ListenAndServe, which then serves over
-// DNS-over-TLS (RFC 8483) instead of UDP (protocol §11). The supplied
+// DNS-over-TLS (RFC 7858) instead of UDP (protocol §8). The supplied
 // *tls.Config must carry a certificate and private key.
 func (s *Server) WithTLS(cfg *tls.Config) *Server {
 	s.tls = cfg
@@ -396,7 +396,7 @@ func indexOf(labels []string, want string) int {
 	return -1
 }
 
-// verifyTSIG enforces transport-layer integrity (protocol §11). It returns nil
+// verifyTSIG enforces transport-layer integrity (protocol §8). It returns nil
 // when TSIG is not configured, or when a valid TSIG signature is present. It
 // returns an error when a signature is required but absent (badsig) or invalid
 // (badsig), so a caller can reject the query.

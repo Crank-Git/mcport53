@@ -22,14 +22,14 @@ type Server struct {
 	registry     *Registry
 	results      *ResultStore
 	verify       func(*dns.CallRequest) error
-	keys         *auth.KeyRegistry            // optional per-tool HMAC keys (protocol §8)
+	keys         *auth.KeyRegistry            // optional per-tool HMAC keys (protocol §7.3)
 	keyVerify    func(*dns.CallRequest) error // verifier for keys; built once so every Handlers() shares one replay guard
-	discoveryKey []byte                       // optional key signing discovery documents (protocol §8)
+	discoveryKey []byte                       // optional key signing discovery documents (protocol §7.3)
 	compress     bool                         // gzip large results into a single envelope (protocol §4.4)
 	useCursor    bool                         // hand out opaque pagination cursors instead of fixed indices (protocol §4.4)
-	tsigName     string                       // optional TSIG key name for transport integrity (protocol §11)
-	tsigSecret   []byte                       // optional TSIG shared secret (protocol §11)
-	tls          *tls.Config                  // optional DoT certificate config (protocol §11)
+	tsigName     string                       // optional TSIG key name for transport integrity (protocol §8)
+	tsigSecret   []byte                       // optional TSIG shared secret (protocol §8)
+	tls          *tls.Config                  // optional DoT certificate config (protocol §8)
 	callTimeout  time.Duration                // per-call tool deadline; DefaultCallTimeout when zero
 }
 
@@ -64,7 +64,7 @@ func (s *Server) WithVerify(fn func(*dns.CallRequest) error) *Server {
 	return s
 }
 
-// WithKeys installs per-tool HMAC keys (protocol §8). Calls are verified with
+// WithKeys installs per-tool HMAC keys (protocol §7.3). Calls are verified with
 // the key registered for the called tool, falling back to the registry's default
 // key; unsigned calls and signatures made with the wrong key are rejected, and a
 // replay guard rejects reused nonces.
@@ -75,7 +75,7 @@ func (s *Server) WithKeys(reg *auth.KeyRegistry) *Server {
 }
 
 // WithDiscoveryKey makes the server sign every discovery document with key
-// (protocol §8). Clients holding the same key can verify the document's
+// (protocol §7.3). Clients holding the same key can verify the document's
 // authenticity, which is what makes delegated discovery trustworthy.
 func (s *Server) WithDiscoveryKey(key []byte) *Server {
 	s.discoveryKey = key
@@ -100,7 +100,7 @@ func (s *Server) WithCursorPagination() *Server {
 }
 
 // WithTSIG requires every query to carry a TSIG signature over secret (protocol
-// §11). The server verifies each query and signs its responses with the same
+// §8). The server verifies each query and signs its responses with the same
 // key, authenticating the exchange at the transport layer in addition to any
 // application HMAC (protocol §7).
 func (s *Server) WithTSIG(name string, secret []byte) *Server {
@@ -109,7 +109,7 @@ func (s *Server) WithTSIG(name string, secret []byte) *Server {
 	return s
 }
 
-// WithTLS serves the server over DNS-over-TLS (RFC 8483) with cfg (protocol §11).
+// WithTLS serves the server over DNS-over-TLS (RFC 7858) with cfg (protocol §8).
 // The *tls.Config must carry a certificate and private key.
 func (s *Server) WithTLS(cfg *tls.Config) *Server {
 	s.tls = cfg
@@ -117,7 +117,7 @@ func (s *Server) WithTLS(cfg *tls.Config) *Server {
 }
 
 // ApplyTransport installs the configured TLS and TSIG settings on the dns.Server
-// (protocol §11). It must be called when building the server:
+// (protocol §8). It must be called when building the server:
 //
 //	dnsSrv := dns.NewServer(zone, &server.Handlers())
 //	dnsSrv = server.ApplyTransport(dnsSrv)
@@ -334,7 +334,7 @@ func encodeCursor(sessionNonce string, idx int) string {
 
 // onDiscovery builds the discovery document (§2.1), signing it with the
 // discovery key when one is configured so clients can verify its authenticity
-// (protocol §8).
+// (protocol §7.3).
 func (s *Server) onDiscovery() *dns.DiscoveryResponse {
 	doc := &dns.DiscoveryResponse{Version: 1}
 	for _, t := range s.registry.Tools() {

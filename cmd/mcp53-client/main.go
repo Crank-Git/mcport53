@@ -1,4 +1,4 @@
-// Command mcp53-client issues MCP tool calls over DNS (protocol §11). With no
+// Command mcp53-client issues MCP tool calls over DNS. With no
 // --tool it lists the server's tools; with --tool it calls the tool and prints
 // the assembled result.
 package main
