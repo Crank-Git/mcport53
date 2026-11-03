@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"net"
 	"strings"
@@ -179,16 +178,11 @@ func TestReplayEndToEndAcrossAddresses(t *testing.T) {
 		if err != nil {
 			t.Fatalf("exchange %s: %v", addr, err)
 		}
-		var b strings.Builder
-		for _, rr := range resp.Answer {
-			if txt, ok := rr.(*miedns.TXT); ok {
-				for _, s := range txt.Txt {
-					d, _ := base64.StdEncoding.DecodeString(s)
-					b.Write(d)
-				}
-			}
+		raw, err := dns.ExtractTXT(resp)
+		if err != nil {
+			t.Fatalf("TXT answer: %v", err)
 		}
-		e, err := codec.ParseEnvelope([]byte(b.String()))
+		e, err := codec.ParseEnvelope([]byte(raw))
 		if err != nil {
 			t.Fatalf("envelope from %s: %v", addr, err)
 		}

@@ -85,7 +85,7 @@ func dohDiscoveryResponse(req *dns.Msg, out string) *dns.Msg {
 		},
 		&dns.TXT{
 			Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
-			Txt: []string{b64(out)},
+			Txt: TXTStrings(out),
 		},
 	}
 	return resp
@@ -128,7 +128,7 @@ func TestDoHCallRoundTrip(t *testing.T) {
 		resp.Authoritative = true
 		resp.Answer = []dns.RR{&dns.TXT{
 			Hdr: dns.RR_Header{Name: req.Question[0].Name, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 0},
-			Txt: []string{b64(string(envOut))},
+			Txt: TXTStrings(string(envOut)),
 		}}
 		return resp
 	})

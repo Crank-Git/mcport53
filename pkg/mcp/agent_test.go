@@ -327,30 +327,15 @@ func TestAgentCallChunkedFetchError(t *testing.T) {
 		resp.Id = req.Id
 		resp.Question = req.Question
 		resp.Authoritative = true
-		b64 := base64.StdEncoding.EncodeToString(b)
 		resp.Answer = []miedns.RR{&miedns.TXT{
 			Hdr: miedns.RR_Header{Name: name, Rrtype: miedns.TypeTXT, Class: miedns.ClassINET, Ttl: 0},
-			Txt: splitTxt(b64),
+			Txt: dns.TXTStrings(string(b)),
 		}}
 		return resp
 	})
 	if _, err := agent.Call(context.Background(), "echo", []byte(`{}`)); err == nil {
 		t.Fatal("expected a chunk fetch error when the follow-up chunk NXDOMAINs")
 	}
-}
-
-// splitTxt splits s into <=255-byte pieces so it fits a single TXT string.
-func splitTxt(s string) []string {
-	var out []string
-	for len(s) > 0 {
-		n := 252
-		if n > len(s) {
-			n = len(s)
-		}
-		out = append(out, s[:n])
-		s = s[n:]
-	}
-	return out
 }
 
 // A chunked call whose envelope reports zero chunks is an error.

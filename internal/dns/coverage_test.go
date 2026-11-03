@@ -33,7 +33,7 @@ func TestNameToLabelsEmpty(t *testing.T) {
 	}
 }
 
-// extractTXT: missing answer and undecodable base64.
+// extractTXT: missing answer and a malformed escape.
 func TestExtractTXTNoAnswer(t *testing.T) {
 	if _, err := extractTXT(new(dns.Msg)); err == nil {
 		t.Fatal("expected error for a message without TXT answers")
@@ -42,9 +42,9 @@ func TestExtractTXTNoAnswer(t *testing.T) {
 
 func TestExtractTXTDecodeError(t *testing.T) {
 	m := new(dns.Msg)
-	m.Answer = append(m.Answer, &dns.TXT{Txt: []string{"!!!not-base64!!!"}})
+	m.Answer = append(m.Answer, &dns.TXT{Txt: []string{`dangling\`}})
 	if _, err := extractTXT(m); err == nil {
-		t.Fatal("expected a base64 decode error")
+		t.Fatal("expected an escape decode error")
 	}
 }
 

@@ -124,7 +124,7 @@ zone "mcp.internal" {
   call results are not served from resolver caches. Some resolvers raise very low
   TTLs to a minimum; that only affects discovery and immutable chunk answers.
 - **Rate limits.** Public resolvers limit queries per client. A large result or
-  upload takes one query per 240-byte chunk or ~126-byte part (§3.1, §4.2), so
+  upload takes one query per 400-byte chunk or ~126-byte part (§3.1, §4.2), so
   very large payloads may be throttled.
 - **Tunnel detection.** Many enterprise DNS security products flag long,
   high-entropy query names as DNS tunnelling. On networks you do not operate,

@@ -271,7 +271,7 @@ func TestServerResultTooLargeIsError(t *testing.T) {
 func TestChunkFetchAfterExpiryOverDNS(t *testing.T) {
 	r := NewRegistry()
 	_ = r.Register(&Tool{Name: "big", Call: func(ctx context.Context, a []byte) (*codec.Envelope, error) {
-		re, _ := codec.JSONResult(strings.Repeat("y", 600))
+		re, _ := codec.JSONResult(strings.Repeat("y", 3*codec.MaxEnvelopeTXT))
 		return codec.OK("big", re, 0), nil
 	}})
 	store := NewResultStoreWithLimits(ResultLimits{TTL: time.Minute})

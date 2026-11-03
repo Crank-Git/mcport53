@@ -6,7 +6,7 @@ package codec
 // a tool name of up to 63 characters, cursor and compression markers) marshals
 // within MaxEnvelopeTXT, and so the whole response fits a 1232-byte EDNS0 UDP
 // message with room for a 255-byte question name and a TSIG record.
-const ChunkSize = 240
+const ChunkSize = 400
 
 // ChunkPayload splits data into consecutive pieces of at most size bytes.
 // An empty input yields no chunks.

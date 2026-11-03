@@ -189,11 +189,12 @@ lowercase forms, so a case-randomised copy of a signed call still verifies.
 ## 4. Result envelope
 
 Results are returned in a **TXT** record carrying a single JSON **envelope**. On
-the wire the envelope JSON is **base64-encoded** and split into consecutive TXT
-character-strings of at most 252 bytes (a multiple of 4, so each string decodes on
-its own); the client decodes each string and concatenates the bytes. Base64 keeps
-the payload in a character set every DNS library and resolver passes through
-unchanged.
+the wire the TXT data is the envelope JSON's **raw bytes**, split into consecutive
+character-strings of at most 255 bytes (RFC 1035 §5.1); the client concatenates
+the strings. TXT data is binary-safe, so no further encoding is needed.
+Implementations whose DNS library exposes TXT strings in presentation format (with
+`\"`, `\\` and `\DDD` escapes, as miekg/dns does) must escape and unescape them so
+the wire carries the exact bytes.
 
 ```json
 {
@@ -224,12 +225,12 @@ unchanged.
 ### 4.2 TXT size limit & chunking
 
 Every response must fit a 1232-byte EDNS0 UDP message (DNS Flag Day 2020), with
-room for a question name of up to 255 bytes and a TSIG record. The envelope JSON is
-base64-encoded on the wire and split across ≤255-byte TXT character-strings, so the
-server bounds the marshaled envelope at **600 bytes** and result chunks at **240
-bytes** of payload:
+room for a question name of up to 255 bytes and a TSIG record. The envelope JSON
+travels as raw TXT bytes, so the server bounds the marshaled envelope at **800
+bytes** and result chunks at **400 bytes** of payload (base64-encoded inside the
+envelope):
 
-- If the marshaled envelope fits in **≤ 600 bytes**, return it directly.
+- If the marshaled envelope fits in **≤ 800 bytes**, return it directly.
 - If it is larger **but complete**, return `chunked`. `result` carries this chunk's
   bytes, base64-encoded (`chunk` is omitted when it is 0):
   ```json
@@ -485,7 +486,7 @@ Both are optional and independent; either or both may be enabled. See `pkg/mcp`
 
 ```
 _mcp._udp.example.  SRV  0 0 53 dns.example.
-_mcp._udp.example.  TXT  "<base64 of {\"version\":1,\"tools\":[{\"name\":\"echo\",...}]}>"
+_mcp._udp.example.  TXT  "{\"version\":1,\"tools\":[{\"name\":\"echo\",...}]}"
 ```
 
 **Call.** Client wants to call tool `echo` with `{"text":"hi"}`:
@@ -495,7 +496,7 @@ _mcp._udp.example.  TXT  "<base64 of {\"version\":1,\"tools\":[{\"name\":\"echo\
    34-character signature label (§7.1).
 3. Query (TXT):
    `<sig>.pmrhizlyoqrduitinerh2.echo.call.signed.k3v7q2m4x6z8a2b4.example.`
-4. Answer: one TXT record whose strings base64-decode to
+4. Answer: one TXT record whose strings concatenate to
    `{"v":1,"status":"ok","tool":"echo","result":"{\"kind\":\"json\",\"value\":...}","ms":1}`.
 
 **Large result.** The call is answered `chunked` with `session=abc`, `total=3`,

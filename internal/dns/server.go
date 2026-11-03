@@ -254,7 +254,18 @@ func (s *Server) fitResponse(w dns.ResponseWriter, r, m *dns.Msg) {
 	if s.tsig != nil && r.IsTsig() != nil {
 		size -= tsigReserve
 	}
-	m.Truncate(size)
+	// Measure the packed message rather than using dns.Msg.Truncate: miekg
+	// sizes TXT strings by their escaped presentation length (a quote counts
+	// as two bytes, a \DDD escape as four), which overestimates the raw TXT
+	// payload and would truncate answers that fit.
+	m.Compress = true
+	if b, err := m.Pack(); err == nil && len(b) <= size {
+		return
+	}
+	// The answer does not fit: send it empty with TC so the requester retries
+	// over TCP (RFC 2181 §9).
+	m.Answer, m.Ns = nil, nil
+	m.Truncated = true
 }
 
 // isUDP reports whether w answers over UDP.
