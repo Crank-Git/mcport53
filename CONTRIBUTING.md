@@ -43,4 +43,4 @@
 ## CI
 
 GitHub Actions runs `go build`, `go vet`, `gofmt`, `go mod tidy -diff`, and
-`go test -race` on every PR into `dev`.
+`go test -race` on every PR into `dev` or `main` and on every push to them.
