@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 250" role="img" aria-labelledby="title">
+  <title id="title">mcport53: a terminal running dig for the TXT record _mcp._udp.example. against a local mcp53-server, which answers with the start of its JSON tool list: version 1, first tool add.</title>
+  <style>
+    text { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 21px; }
+    .name { font-size: 50px; font-weight: 700; fill: #e6edf3; }
+    .sub { fill: #8b949e; }
+    .prompt { fill: #7ee787; }
+    .cmd { fill: #e6edf3; }
+    .answer { fill: #ffa657; }
+    .cursor { fill: #7ee787; animation: blink 1.2s steps(2, start) infinite; }
+    @keyframes blink { to { visibility: hidden; } }
+    @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+  </style>
+  <rect x="1" y="1" width="898" height="248" rx="10" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+  <text class="name" x="36" y="70">mcport53</text>
+  <text class="sub" x="310" y="68">MCP tools reachable over DNS</text>
+  <text x="36" y="118"><tspan class="prompt">$ </tspan><tspan class="cmd">dig @127.0.0.1 -p 5333 +short TXT _mcp._udp.example.</tspan></text>
+  <text class="answer" x="36" y="152">"{\"version\":1,\"tools\":[{\"name\":\"add\",\"description\":…</text>
+  <text class="prompt" x="36" y="222">$</text>
+  <rect class="cursor" x="60" y="205" width="12" height="22"/>
+</svg>
