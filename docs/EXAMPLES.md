@@ -41,9 +41,9 @@ go run ./cmd/mcp53-client --server 127.0.0.1:5333 --zone example.
 ```
 version 1: 3 tool(s)
 
-  add     Add two numbers and return their sum.
-  echo    Return the supplied text unchanged.
-  upper   Return the supplied text in uppercase.
+  add        Add two numbers and return their sum.
+  echo       Return the supplied text unchanged.
+  upper      Return the supplied text in uppercase.
 ```
 
 ## 3. Call a tool
@@ -188,4 +188,5 @@ endpoint, which returns the SRV + TXT records for the zone.
 ## Related
 
 - [Protocol spec](PROTOCOL.md) — naming, encoding, envelopes, auth.
-- [README](../README.md) — overview and branch model.
+- [README](../README.md) — overview.
+- [CONTRIBUTING](../CONTRIBUTING.md) — branch model and workflow.
